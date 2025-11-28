@@ -1,0 +1,14 @@
+OBJ=hello.o\
+	b1.o
+
+all:V:  $OBJ
+
+a.out.wasm:	hello.o
+	emcc $stem.o
+
+clean:V:
+	rm -f *.o *.js *.wasm
+
+
+%.o:	%.c
+	emcc -c $stem.c
