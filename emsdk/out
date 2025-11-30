@@ -1,0 +1,28 @@
+
+b1.o:	file format wasm 0x1
+
+Code Disassembly:
+
+00005a func[0] <fadd>:
+ 00005b: 01 7f                      | local[2] type=i32
+ 00005d: 23 80 80 80 80 00          | global.get 0 <env.__stack_pointer>
+ 000063: 41 10                      | i32.const 16
+ 000065: 6b                         | i32.sub
+ 000066: 21 02                      | local.set 2
+ 000068: 20 02                      | local.get 2
+ 00006a: 20 00                      | local.get 0
+ 00006c: 36 02 0c                   | i32.store 2 12
+ 00006f: 20 02                      | local.get 2
+ 000071: 20 01                      | local.get 1
+ 000073: 36 02 08                   | i32.store 2 8
+ 000076: 20 02                      | local.get 2
+ 000078: 20 02                      | local.get 2
+ 00007a: 28 02 0c                   | i32.load 2 12
+ 00007d: 20 02                      | local.get 2
+ 00007f: 28 02 08                   | i32.load 2 8
+ 000082: 6a                         | i32.add
+ 000083: 36 02 04                   | i32.store 2 4
+ 000086: 20 02                      | local.get 2
+ 000088: 28 02 04                   | i32.load 2 4
+ 00008b: 0f                         | return
+ 00008c: 0b                         | end
