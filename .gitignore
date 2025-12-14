@@ -1,4 +1,5 @@
 *.o
 *.js
 *.wasm
-
+*.dis
+*.sbl

@@ -1,6 +1,7 @@
-DIS=wasm.dis
+INCLUDES=-I../../module
+DIS=wasm.dis\
+	t1.dis
 
 all:V: $DIS
 
-%.dis: %.b
-	limbo $stem.b
+<$ROOT/mkfiles/mkdis

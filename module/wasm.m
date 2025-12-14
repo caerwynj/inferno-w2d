@@ -17,12 +17,13 @@ Wasm: module
 
 	Mod: adt
 	{
+		magic:  	int;
+		version: 	int;
 		name:	string;
-	}
+	};
 
 	init:		fn();
 	loadobj:	fn(file: string): (ref Mod, string);
 	op2s:	fn(op: int): string;
-	inst2s:	fn(ins: ref Inst): string;
 };
 
