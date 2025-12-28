@@ -4,4 +4,8 @@ DIS=wasm.dis\
 
 all:V: $DIS
 
+
+test:V: all
+	mash t1 b1.o
+
 <$ROOT/mkfiles/mkdis

@@ -3,3 +3,5 @@
 *.wasm
 *.dis
 *.sbl
+*.swp
+.exrc
