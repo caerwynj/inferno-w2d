@@ -4,6 +4,7 @@ DIS=wasm.dis\
 
 all:V: $DIS
 
+$DIS: ../../module/wasm.m
 
 test:V: all
 	mash t1 b1.o

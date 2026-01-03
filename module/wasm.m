@@ -37,6 +37,9 @@ Wasm: module
 	};
 
 	Import: adt {
+		modname: string;
+		name: string;	
+		desc: int;
 		pick {
 		Func => typeidx: int;
 		Table =>  min,max: int;
@@ -47,15 +50,7 @@ Wasm: module
 
 	ImportSection: adt {
 		size: int;
-		modname: string;
-		name: string;	
-		desc: int;
 		imports: array of ref Import;
-	};
-
-	FuncSection: adt {
-		size: int;
-		funcs: array of int;
 	};
 
 	Local: adt {
@@ -68,14 +63,20 @@ Wasm: module
 		arg1, arg2: int;
 	};
 
-	Func:adt {
+	Code:adt {
+		size: int;
 		locals: array of ref Local;
 		code: array of ref Winst;	
 	};
 
+	FuncSection: adt {
+		size: int;
+		funcs: array of int;
+	};
+
 	CodeSection: adt {
 		size: int;
-		funcs: array of ref Func;
+		codes: array of ref Code;
 	};
 
 
