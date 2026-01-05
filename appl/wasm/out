@@ -1,0 +1,40 @@
+mash t1 b1.o
+TYPE len 7
+TYPE vlen 1
+functype 60
+arg typ 7f
+arg typ 7f
+res typ 7f
+IMPORT len 47
+IMPORT: env __linear_memory 2
+IMPORT: env __stack_pointer 3
+FUNC len 2
+SFUNC 0
+CODE len 53
+vlen 1 code len 53 bytes; codesize 51, localsize 1
+local 1 0x7f
+global.get 0
+i32.const 16
+i32.sub
+local.set 2
+local.get 2
+local.get 0
+i32.store 2 12
+local.get 2
+local.get 1
+i32.store 2 8
+local.get 2
+local.get 2
+i32.load 2 12
+local.get 2
+i32.load 2 8
+i32.add
+i32.store 2 4
+local.get 2
+i32.load 2 4
+return
+CUSTOM len 27
+CUSTOM len 16
+CUSTOM len 120
+CUSTOM len 148
+Magic 6d736100d 

@@ -1,0 +1,200 @@
+# wasm isa
+
+Wunreachable,	#0x00
+Wnop,		#0x01
+Wblock,	#0x02
+Wloop,		#0x03
+Wif,		#0x04
+Welse,		#0x05
+Wna06,
+Wna07,
+Wna08,
+Wna09,
+Wna0a,
+Wend,		#0x0b
+Wbr,		#0x0c
+Wbr_if,	#0x0d
+Wbr_table,	#0x0e
+Wreturn,	#0x0f
+Wcall,		#0x10
+Wcall_indirect, #0x11
+Wna12,
+Wna13,
+Wna14,
+Wna15,
+Wna16,
+Wna17,
+Wna18,
+Wna19,
+Wdrop,		#0x1a
+Wselect,	#0x1b
+Wna1c,
+Wna1d,
+Wna1e,
+Wna1f,
+Wlocal_get,	#0x20
+Wlocal_set,	#0x21
+Wlocal_tee,	#0x22
+Wglobal_get,	#0x23
+Wglobal_set,	#0x24
+Wna25,
+Wna26,
+Wna27,
+Wi32_load,	#0x28
+Wi64_load,	#0x29
+Wf32_load,	#0x2a
+Wf64_load,	#0x2b
+Wi32_load8_s,	#0x2c
+Wi32_load16_s,	#0x2e
+Wi64_load8_s,	#0x30
+Wi64_load16_s,	#0x32
+Wi64_load32_s,	#0x34
+Wi32_load8_u,	#0x2d
+Wi32_load16_u,	#0x2f
+Wi64_load8_u,	#0x31
+Wi64_load16_u,	#0x33
+Wi64_load32_u,	#0x35
+Wi32_store,	#0x36
+Wi64_store,	#0x37
+Wf32_store,	#0x38
+Wf64_store,	#0x39
+Wi32_store8,	#0x3a
+Wi32_store16,	#0x3b
+Wi64_store8,	#0x3c
+Wi64_store16,	#0x3d
+Wi64_store32,	#0x3e
+Wmemory_size,	#0x3f
+Wmemory_grow,	#0x40
+Wi32_const,	#0x41
+Wi64_const,	#0x42
+Wf32_const,	#0x43
+Wf64_const,	#0x44
+Wi32_eqz,	#0x45
+Wi32_eq,	#0x46
+Wi32_ne,	#0x47
+Wi32_lt_s,	#0x48
+Wi32_lt_u,	#0x49
+Wi32_gt_s,	#0x4a
+Wi32_gt_u,	#0x4b
+Wi32_le_s,	#0x4c
+Wi32_le_u,	#0x4d
+Wi32_ge_s,	#0x4e
+Wi32_ge_u,	#0x4f
+Wi64_eqz,	#0x50
+Wi64_eq,	#0x51
+Wi64_ne,	#0x52
+Wi64_lt_s,	#0x53
+Wi64_lt_u,	#0x54
+Wi64_gt_s,	#0x55
+Wi64_gt_u,	#0x56
+Wi64_le_s,	#0x57
+Wi64_le_u,	#0x58
+Wi64_ge_s,	#0x59
+Wi64_ge_u,	#0x5a
+Wf32_eq,	#0x5b
+Wf32_ne,	#0x5c
+Wf32_lt,	#0x5d
+Wf32_gt,	#0x5e
+Wf32_le,	#0x5f
+Wf32_ge,	#0x60
+Wf64_eq,	#0x61
+Wf64_ne,	#0x62
+Wf64_lt,	#0x63
+Wf64_gt,	#0x64
+Wf64_le,	#0x65
+Wf64_ge,	#x066
+Wi32_clz,	#0x67
+Wi32_ctz,	#0x68
+Wi32_popcnt,	#0x69
+Wi32_add,	#0x6a
+Wi32_sub,	#0x6b
+Wi32_mul,	#0x6c
+Wi32_div_s,	#0x6d
+Wi32_div_u,	#0x6e
+Wi32_rem_s,	#0x6f
+Wi32_rem_u,	#0x70
+Wi32_and,	#0x71
+Wi32_or,	#0x72
+Wi32_xor,	#0x73
+Wi32_shl,	#0x74
+Wi32_shr_s,	#0x75
+Wi32_shr_u,	#0x76
+Wi32_rotl,	#0x77
+Wi32_rotr,	#0x78
+Wi64_clz,	#0x79
+Wi64_ctz,	#0x7a
+Wi64_popcnt,	#0x7b
+Wi64_add,	#0x7c
+Wi64_sub,	#0x7d
+Wi64_mul,	#0x7e
+Wi64_div_s,	#0x7f
+Wi64_div_u,	#0x80
+Wi64_rem_s,	#0x81
+Wi64_rem_u,	#0x82
+Wi64_and,	#0x83
+Wi64_or,	#0x84
+Wi64_xor,	#0x85
+Wi64_shl,	#0x86
+Wi64_shr_s,	#0x87
+Wi64_shr_u,	#0x88
+Wi64_rotl,	#0x89
+Wi64_rotr,	#0x8a
+Wf32_abs,	#0x8b
+Wf32_neg,	#0x8c
+Wf32_ceil,	#0x8d
+Wf32_floor,	#0x8e
+Wf32_trunc,	#0x8f
+Wf32_nearest,	#0x90
+Wf32_sqrt,	#0x91
+Wf32_add,	#0x92
+Wf32_sub,	#0x93
+Wf32_mul,	#0x94
+Wf32_div,	#0x95
+Wf32_min,	#0x96
+Wf32_max,	#0x97
+Wf32_copysign,	#0x98
+Wf64_abs,	#0x99
+Wf64_neg,	#0x9a
+Wf64_ceil,	#0x9b
+Wf64_floor,	#0x9c
+Wf64_trunc,	#0x9d
+Wf64_nearest,	#0x9e
+Wf64_sqrt,	#0x9f
+Wf64_add,	#0xa0
+Wf64_sub,	#0xa1
+Wf64_mul,	#0xa2
+Wf64_div,	#0xa3
+Wf64_min,	#0xa4
+Wf64_max,	#0xa5
+Wf64_copysign, #0xa6
+Wi32_wrap_i64,		#0xa7
+Wi32_trunc_f32_s,	#0xa8
+Wi32_trunc_f32_u,	#0xa9
+Wi32_trunc_f64_s,	#0xaa
+Wi32_trunc_f64_u,	#0xab
+Wi64_extend_i32_s,	#0xac
+Wi64_extend_i32_u,	#0xad
+Wi64_trunc_f32_s,	#0xae
+Wi64_trunc_f32_u,	#0xaf
+Wi64_trunc_f64_s,	#0xb0
+Wi64_trunc_f64_u,	#0xb1
+Wf32_convert_i32_s,	#0xb2
+Wf32_convert_i32_u,	#0xb3
+Wf32_convert_i64_s,	#0xb4
+Wf32_convert_i64_u,	#0xb5
+Wf32_demote_f64,	#0xb6
+Wf64_convert_i32_s,	#0xb7
+Wf64_convert_i32_u,	#0xb8
+Wf64_convert_i64_s,	#0xb9
+Wf64_convert_i64_u,	#0xba
+Wf64_promote_f32,	#0xbb
+Wi32_reinterpret_f32,	#0xbc
+Wi64_reinterpret_f64,	#0xbd
+Wf32_reinterpret_i32,	#0xbe
+Wf64_reinterpret_i64,	#0xbf
+Wi32_extend8_s,	#0xc0
+Wi32_extend16_s,	#0xc1
+Wi64_extend8_s,	#0xc2
+Wi64_extend16_s,	#0xc3
+Wi64_extend32_s: con iota;	#0xc4
+	

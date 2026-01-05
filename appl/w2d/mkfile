@@ -1,0 +1,53 @@
+<$ROOT/mkconfig
+
+TARG=w2d.dis\
+
+MODULES=\
+	java.m\
+	javaisa.m\
+	reloc.m\
+	$ROOT/appl/cmd/limbo/arg.m\
+	$ROOT/appl/cmd/limbo/isa.m\
+	asm.b\
+	bb.b\
+	datarloc.b\
+	desc.b\
+	dis.b\
+	entry.b\
+	finally.b\
+	frame.b\
+	w2d.b\
+	javadas.b\
+	javatbl.b\
+	links.b\
+	loader.b\
+	ltreloc.b\
+	main.b\
+	mdata.b\
+	module.b\
+	patch.b\
+	rtreloc.b\
+	sbl.b\
+	simjvm.b\
+	unify.b\
+	util.b\
+	xlate.b\
+	wasm.m\
+	wasmisa.m\
+	optab.m\
+	wasmdas.b\
+
+SYSMODULES=\
+	bufio.m\
+	draw.m\
+	keyring.m\
+	math.m\
+	string.m\
+	sys.m\
+
+DISBIN=../../dis/wasm
+
+<$ROOT/mkfiles/mkdis
+
+LIMBOFLAGS=-I$MODDIR\
+	-I$ROOT/appl/cmd/limbo\
