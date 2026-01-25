@@ -40,7 +40,7 @@ translate(in: string, out: string)
 		dumpcpool();
 
 	#thisCreloc();
-	xlate();
+	wxlate(m);
 	#mpdesc();
 	# Patch frame/call for invokespecial/invokestatic.
 	#dofcpatch();
