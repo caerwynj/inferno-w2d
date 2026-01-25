@@ -1,5 +1,0 @@
-# setup emsdk environment
-. ~/github/emsdk/emsdk_env.sh
-
-emcc -c -g b1.c
-wasm-objdump -hd b1.o
