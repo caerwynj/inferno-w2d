@@ -47,6 +47,8 @@ translate(in: string, out: string)
 	# Patch instructions for run-time resolution.
 	#doRTpatch();
 
+	return;
+
 	if(gendis == 0) {	# generate .s file
 		asminst();
 		asmentry();
@@ -105,10 +107,10 @@ encodename(name: string): string
 mkfileext(file: string, ext: string): string
 {
 	n := len file;
-	if(n <= 6 || file[n-6:] != ".wasm")
+	if(n <=5 || file[n-5:] != ".wasm")
 		usage();
 	else
-		n -= 6;
+		n -= 5;
 	if(n > MAXUNENCODED) {
 		file = encodename(file);
 		n = ENCODEDLEN;

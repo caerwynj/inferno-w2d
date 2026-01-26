@@ -1,0 +1,8 @@
+INCLUDES=-I../../module
+TARG=add.dis\
+
+all:V: $DIS
+
+DISBIN=../../dis
+
+<$ROOT/mkfiles/mkdis

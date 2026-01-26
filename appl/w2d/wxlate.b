@@ -1,4 +1,4 @@
-W: ref Winst;
+Wi: ref Winst;
 
 xwasmload(op: int)
 {
@@ -10,8 +10,8 @@ wasm2dis(codes: array of ref Winst)
 	for(i := 0; i < len codes; i++) {
 		# if start of basic block
 		#clearreg();
-		W = codes[i];
-		case W.opcode {
+		Wi = codes[i];
+		case Wi.opcode {
 		Wglobal_get =>
 			;
 		Wi32_load =>
@@ -31,7 +31,7 @@ wxlate(m: ref Mod)
 		#flowgraph();
 		#simwasm();
 		#unify();
-		wasm2dis(m.codesection.codes[i].code);
+		#wasm2dis(m.codesection.codes[i].code);
 	}
 }
 

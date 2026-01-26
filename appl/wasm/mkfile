@@ -1,12 +1,14 @@
 INCLUDES=-I../../module
-DIS=wasm.dis\
-	t1.dis
+TARG=wasm.dis\
+	rdwasm.dis
 
 all:V: $DIS
 
-$DIS: ../../module/wasm.m
+$TARG: ../../module/wasm.m
 
 test:V: all
-	mash t1 b1.o
+	mash rdwasm b1.o
+
+DISBIN=../../dis
 
 <$ROOT/mkfiles/mkdis

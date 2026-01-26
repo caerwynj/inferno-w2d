@@ -1,0 +1,8 @@
+<$ROOT/mkconfig
+
+DIRS=\
+	ex\
+	w2d\
+	wasm\
+
+<$ROOT/mkfiles/mksubdirs

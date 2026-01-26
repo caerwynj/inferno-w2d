@@ -15,12 +15,17 @@ wasm-objdump -hd b1.o
 
 # compile limbo .b file
 ```
-limbo file.b
+limbo src.b
 ```
 
-# run inferno os .dis file
-mash is a shell like Plan 9 rc but runs in the Inferno OS and supports most typical UNIX command line utilities like cat, ls, cd, wc, pwd, uniq, echo.
+# build the project
 ```
-mash file.dis
+mk install
+```
+
+# execute a .dis file
+The Inferno OS shell supports most typical UNIX command line utilities like cat, ls, cd, wc, pwd, uniq, echo.
+```
+emu sh -lc "wasm/w2d.dis testfile.wasm"
 ```
 
