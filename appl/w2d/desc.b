@@ -49,9 +49,9 @@ descid(ln: int, nmap: int, map: array of byte): int
 	d = newDesc(id, ln, nmap, map);
 	if(dlist == nil)
 		dlist = d;
-	#else
-	#	dtail.next = d;
-	#dtail = d;
+	else
+		dtail.next = d;
+	dtail = d;
 
 	return d.id;
 }
@@ -67,6 +67,8 @@ mpdescid(ln: int, nmap: int, map: array of byte)
 	d = newDesc(0, ln, nmap, map);
 	d.next = dlist;
 	dlist = d;
+	if(dtail == nil)
+		dtail = d;
 }
 
 #

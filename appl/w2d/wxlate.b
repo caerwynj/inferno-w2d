@@ -855,7 +855,8 @@ wasmvar()
 
 wdisvar()
 {
-	# no module data to write
+	# no module data to write, but must terminate the data section
+	bout.putb(byte 0);
 }
 
 #
@@ -900,39 +901,29 @@ wxlate(m: ref Mod)
 	links = nil;
 
 	# Create module data descriptor (id=0) for WASM (empty, no pointers)
-	sys->print("DEBUG: before mpdescid\n");
 	mpdescid(0, 0, array [0] of byte);
-	sys->print("DEBUG: after mpdescid\n");
 
 	for(i := 0; i < len m.codesection.codes; i++) {
-		sys->print("DEBUG: starting function %d\n", i);
 		wcode := m.codesection.codes[i];
 		typeidx := m.funcsection.funcs[i];
 		functype := m.typesection.types[typeidx];
 
 		wftype = functype;
-		sys->print("DEBUG: before wopenframe\n");
 
 		# Initialize frame for this function
 		wopenframe(functype, wcode.locals);
-		sys->print("DEBUG: after wopenframe\n");
 
 		# Record start PC for this function
 		funcpc := pcdis;
 
 		# Simulate to allocate frame positions
-		sys->print("DEBUG: before simwasm\n");
 		simwasm(wcode.code, functype);
-		sys->print("DEBUG: after simwasm\n");
 
 		# Translate to Dis instructions
-		sys->print("DEBUG: before wasm2dis\n");
 		wasm2dis(wcode.code);
-		sys->print("DEBUG: after wasm2dis\n");
 
 		# Copy return value to return location if function returns a value
 		if(len functype.rets > 0) {
-			sys->print("DEBUG: copying return value\n");
 			# Find the last instruction that produced a value (has non-nil dst)
 			for(pc := len wcode.code - 1; pc >= 0; pc--) {
 				if(wcode.code[pc].dst != nil) {
@@ -942,27 +933,18 @@ wxlate(m: ref Mod)
 					break;
 				}
 			}
-			sys->print("DEBUG: done copying return value\n");
 		}
 
 		# Add return instruction at end
-		sys->print("DEBUG: before IRET\n");
 		iret := newi(IRET);
 		iret = iret;  # suppress warning
-		sys->print("DEBUG: after IRET\n");
 
 		# Close frame and get type descriptor
-		sys->print("DEBUG: before wcloseframe\n");
 		tid := wcloseframe();
-		sys->print("DEBUG: after wcloseframe\n");
 
 		# Create link for this function
 		funcname := sys->sprint("func%d", i);
 		xtrnlink(tid, funcpc, funcname, "");
-
-		# Output function (for debugging)
-		sys->print("# Function %d: %d params, %d results, %d instructions, tid=%d\n",
-			i, len functype.args, len functype.rets, pcdis - funcpc, tid);
 	}
 
 	# Set first function as entry point if no main was found
