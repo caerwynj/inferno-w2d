@@ -18,11 +18,11 @@ nlinks:	int;
 # Create a Link entry; one for each method defined in the class.
 #
 
-xtrnlink(id: int, pc: int, name: string, sig: string)
+xtrnlink(id: int, pc: int, isig: int, name: string, sig: string)
 {
 	l: ref Link;
 
-	l = ref Link(id, pc, 1247901281, name + sig, nil);
+	l = ref Link(id, pc, isig, name + sig, nil);
 	if(name == "main")
 		setentry(pc, id);
 	if(links == nil)

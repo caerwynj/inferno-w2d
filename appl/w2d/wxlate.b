@@ -1,4 +1,52 @@
 #
+# Compute DIS link signature from WASM function type.
+# Builds a type signature string (e.g., f(i,i)i) and
+# MD5 hashes it, then XOR-folds to 4 bytes.
+#
+
+wsigchar(wtype: int): string
+{
+	case wtype {
+	I32 =>
+		return "i";
+	I64 =>
+		return "B";
+	F32 or F64 =>
+		return "r";
+	}
+	return "i";
+}
+
+wfuncsig(ft: ref FuncType): int
+{
+	i: int;
+
+	# Build signature string like f(i,i)i
+	s := "f(";
+	for(i = 0; i < len ft.args; i++) {
+		if(i > 0)
+			s += ",";
+		s += wsigchar(ft.args[i]);
+	}
+	s += ")";
+	for(i = 0; i < len ft.rets; i++)
+		s += wsigchar(ft.rets[i]);
+
+	# MD5 hash
+	buf := array of byte s;
+	kr := load Keyring Keyring->PATH;
+	md5sig := array[Keyring->MD5dlen] of { * => byte 0 };
+	kr->md5(buf, len buf, md5sig, nil);
+
+	# XOR-fold 16 bytes into 4 bytes (little-endian)
+	sig := 0;
+	for(i = 0; i < Keyring->MD5dlen; i += 4)
+		sig ^= int md5sig[i+0] | (int md5sig[i+1]<<8) | (int md5sig[i+2]<<16) | (int md5sig[i+3]<<24);
+
+	return sig;
+}
+
+#
 # Translate WASM instructions to Dis instructions.
 #
 
@@ -249,7 +297,7 @@ xlatwinst()
 		if(len wftype.rets > 0) {
 			imov := newi(wmovinst(wftype.rets[0]));
 			*imov.s = *wsrc(0);
-			addrsind(imov.d, Afp, WREGRET);
+			addrdind(imov.d, Afpind, WREGRET, 0);
 		}
 		i = newi(IRET);
 
@@ -929,7 +977,7 @@ wxlate(m: ref Mod)
 				if(wcode.code[pc].dst != nil) {
 					imov := newi(wmovinst(functype.rets[0]));
 					*imov.s = *wcode.code[pc].dst;
-					addrsind(imov.d, Afp, WREGRET);
+					addrdind(imov.d, Afpind, WREGRET, 0);
 					break;
 				}
 			}
@@ -944,7 +992,7 @@ wxlate(m: ref Mod)
 
 		# Create link for this function
 		funcname := sys->sprint("func%d", i);
-		xtrnlink(tid, funcpc, funcname, "");
+		xtrnlink(tid, funcpc, wfuncsig(functype), funcname, "");
 	}
 
 	# Set first function as entry point if no main was found

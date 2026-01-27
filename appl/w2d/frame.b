@@ -549,7 +549,7 @@ wlocaltype(ix: int): byte
 
 wopenframe(functype: ref FuncType, wlocaltypes: array of ref Wlocal)
 {
-	frameoff = REGSIZE;
+	frameoff = NREG * IBY2WD + 3 * IBY2WD;	# MaxTemp: skip fixed regs + temp slots
 	nwlocals = 0;
 
 	# reserve space for parameters

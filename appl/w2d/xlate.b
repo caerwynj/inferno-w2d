@@ -2864,7 +2864,7 @@ genclinit()
 	openframe("()V", ACC_STATIC);
 	clinitclone = clinitinits();		# save for -v option
 	newi(IRET);
-	xtrnlink(closeframe(), savepc, "<clinit>", "()V");
+	xtrnlink(closeframe(), savepc, 1247901281, "<clinit>", "()V");
 }
 
 #
@@ -2876,7 +2876,7 @@ genclone(): ref Inst
 	i, clone: ref Inst;
 	fr: ref Freloc;
 
-	xtrnlink(descid(40, 2, array [2] of { byte 0, byte 16rc0 }), pcdis, "<clone>", "()V");
+	xtrnlink(descid(40, 2, array [2] of { byte 0, byte 16rc0 }), pcdis, 1247901281, "<clone>", "()V");
 
 	#
 	# new    @Class, 36(fp)
@@ -2950,7 +2950,7 @@ xlate()
 				}
 				java2dis();
 				bbfree();
-				xtrnlink(closeframe(), savepcdis, name, sig);
+				xtrnlink(closeframe(), savepcdis, 1247901281, name, sig);
 				patchmethod(savepcdis);
 				patchehinst();
 				patchfree();

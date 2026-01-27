@@ -1,11 +1,12 @@
 #0
-	movw	40(fp),48(fp)
-	movw	32(fp),56(fp)
-	addw	48(fp),56(fp),48(fp)
-	movw	48(fp),32(fp)
+	movw	72(fp),80(fp)
+	movw	64(fp),88(fp)
+	addw	80(fp),88(fp),80(fp)
+	movw	80(fp),0(32(fp))
 	ret	
 	entry	0, 0
 	desc	$0,0,""
+	desc	$1,96,"0000"
 	var	@mp,0
 	module	Wasm
-	link	1,0,0x4a617661,"func0"
+	link	1,0,0x6584767b,"func0"
