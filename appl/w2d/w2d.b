@@ -48,4 +48,5 @@ include "dis.b";
 include "sbl.b";
 include "util.b";
 
+include "simwasm.b";
 include "wxlate.b";

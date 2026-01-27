@@ -1,6 +1,7 @@
 <$ROOT/mkconfig
 
 DIRS=\
+	cmd\
 	ex\
 	w2d\
 	wasm\

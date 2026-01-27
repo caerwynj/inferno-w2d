@@ -155,26 +155,26 @@ loadobj(wasmfile: string): (ref Mod, string)
 						align := operand();
 						offset := operand();
 						sys->print("%s %d %d\n", optab[opcode], align, offset);
-						l = ref Winst(opcode, align, offset) :: l;
+						l = ref Winst(opcode, align, offset, nil) :: l;
 					Wlocal_get or Wlocal_set or Wlocal_tee or Wglobal_get or Wglobal_set =>
 						n := operand();
 						sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1) :: l;
+						l = ref Winst(opcode, n, -1, nil) :: l;
 					Wbr or Wbr_if or Wcall or Wcall_indirect =>
 						idx := operand();
 						sys->print("%s %d\n", optab[opcode], idx);
-						l = ref Winst(opcode, idx, -1) :: l;
+						l = ref Winst(opcode, idx, -1, nil) :: l;
 					Wi32_const or Wi64_const =>
 						n := operand();
 						sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1) :: l;
+						l = ref Winst(opcode, n, -1, nil) :: l;
 					Wf32_const or Wf64_const =>
 						n := operand();
 						sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1) :: l;
+						l = ref Winst(opcode, n, -1, nil) :: l;
 					* =>
 						sys->print("%s\n", optab[opcode]);
-						l = ref Winst(opcode, -1, -1) :: l;
+						l = ref Winst(opcode, -1, -1, nil) :: l;
 						;
 					}
 					opcode = getb();

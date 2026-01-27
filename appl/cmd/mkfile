@@ -1,0 +1,9 @@
+INCLUDES=-I../../module
+TARG=disdump.dis\
+	dis.dis\
+
+all:V: $DIS
+
+DISBIN=../../dis
+
+<$ROOT/mkfiles/mkdis

@@ -5,11 +5,11 @@ optab := array[] of {
 	"loop",		#0x03
 	"if",		#0x04
 	"else",		#0x05
-	"",
-	"",
-	"",
-	"",
-	"",
+	"",		#0x06
+	"",		#0x07
+	"",		#0x08
+	"",		#0x09
+	"",		#0x0a
 	"end",		#0x0b
 	"br",		#0x0c
 	"br_if",	#0x0d
@@ -17,41 +17,41 @@ optab := array[] of {
 	"return",	#0x0f
 	"call",		#0x10
 	"call_indirect", #0x11
-	"",
-	"",
-	"",
-	"",
-	"",
-	"",
-	"",
-	"",
+	"",		#0x12
+	"",		#0x13
+	"",		#0x14
+	"",		#0x15
+	"",		#0x16
+	"",		#0x17
+	"",		#0x18
+	"",		#0x19
 	"drop",		#0x1a
 	"select",	#0x1b
-	"",
-	"",
-	"",
-	"",
+	"",		#0x1c
+	"",		#0x1d
+	"",		#0x1e
+	"",		#0x1f
 	"local.get",	#0x20
 	"local.set",	#0x21
 	"local.tee",	#0x22
 	"global.get",	#0x23
 	"global.set",	#0x24
-	"",
-	"",
-	"",
+	"",		#0x25
+	"",		#0x26
+	"",		#0x27
 	"i32.load",	#0x28
 	"i64.load",	#0x29
 	"f32.load",	#0x2a
 	"f64.load",	#0x2b
 	"i32.load8_s",	#0x2c
-	"i32.load16_s",	#0x2e
-	"i64.load8_s",	#0x30
-	"i64.load16_s",	#0x32
-	"i64.load32_s",	#0x34
 	"i32.load8_u",	#0x2d
+	"i32.load16_s",	#0x2e
 	"i32.load16_u",	#0x2f
+	"i64.load8_s",	#0x30
 	"i64.load8_u",	#0x31
+	"i64.load16_s",	#0x32
 	"i64.load16_u",	#0x33
+	"i64.load32_s",	#0x34
 	"i64.load32_u",	#0x35
 	"i32.store",	#0x36
 	"i64.store",	#0x37
@@ -101,7 +101,7 @@ optab := array[] of {
 	"f64.lt",	#0x63
 	"f64.gt",	#0x64
 	"f64.le",	#0x65
-	"f64.ge",	#x066
+	"f64.ge",	#0x66
 	"i32.clz",	#0x67
 	"i32.ctz",	#0x68
 	"i32.popcnt",	#0x69
@@ -165,7 +165,7 @@ optab := array[] of {
 	"f64.div",	#0xa3
 	"f64.min",	#0xa4
 	"f64.max",	#0xa5
-	"f64.copysign", #0xa6
+	"f64.copysign",	#0xa6
 	"i32.wrap_i64",		#0xa7
 	"i32.trunc_f32_s",	#0xa8
 	"i32.trunc_f32_u",	#0xa9
@@ -211,4 +211,3 @@ sectab := array [] of {
 	"CODE",
 	"DATA"
 };
-

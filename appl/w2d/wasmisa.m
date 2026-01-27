@@ -2,7 +2,7 @@
 
 Wunreachable,	#0x00
 Wnop,		#0x01
-Wblock,	#0x02
+Wblock,		#0x02
 Wloop,		#0x03
 Wif,		#0x04
 Welse,		#0x05
@@ -13,11 +13,11 @@ Wna09,
 Wna0a,
 Wend,		#0x0b
 Wbr,		#0x0c
-Wbr_if,	#0x0d
+Wbr_if,		#0x0d
 Wbr_table,	#0x0e
 Wreturn,	#0x0f
 Wcall,		#0x10
-Wcall_indirect, #0x11
+Wcall_indirect,	#0x11
 Wna12,
 Wna13,
 Wna14,
@@ -45,14 +45,14 @@ Wi64_load,	#0x29
 Wf32_load,	#0x2a
 Wf64_load,	#0x2b
 Wi32_load8_s,	#0x2c
-Wi32_load16_s,	#0x2e
-Wi64_load8_s,	#0x30
-Wi64_load16_s,	#0x32
-Wi64_load32_s,	#0x34
 Wi32_load8_u,	#0x2d
+Wi32_load16_s,	#0x2e
 Wi32_load16_u,	#0x2f
+Wi64_load8_s,	#0x30
 Wi64_load8_u,	#0x31
+Wi64_load16_s,	#0x32
 Wi64_load16_u,	#0x33
+Wi64_load32_s,	#0x34
 Wi64_load32_u,	#0x35
 Wi32_store,	#0x36
 Wi64_store,	#0x37
@@ -102,7 +102,7 @@ Wf64_ne,	#0x62
 Wf64_lt,	#0x63
 Wf64_gt,	#0x64
 Wf64_le,	#0x65
-Wf64_ge,	#x066
+Wf64_ge,	#0x66
 Wi32_clz,	#0x67
 Wi32_ctz,	#0x68
 Wi32_popcnt,	#0x69
@@ -166,7 +166,7 @@ Wf64_mul,	#0xa2
 Wf64_div,	#0xa3
 Wf64_min,	#0xa4
 Wf64_max,	#0xa5
-Wf64_copysign, #0xa6
+Wf64_copysign,	#0xa6
 Wi32_wrap_i64,		#0xa7
 Wi32_trunc_f32_s,	#0xa8
 Wi32_trunc_f32_u,	#0xa9
@@ -192,9 +192,8 @@ Wi32_reinterpret_f32,	#0xbc
 Wi64_reinterpret_f64,	#0xbd
 Wf32_reinterpret_i32,	#0xbe
 Wf64_reinterpret_i64,	#0xbf
-Wi32_extend8_s,	#0xc0
+Wi32_extend8_s,		#0xc0
 Wi32_extend16_s,	#0xc1
-Wi64_extend8_s,	#0xc2
+Wi64_extend8_s,		#0xc2
 Wi64_extend16_s,	#0xc3
 Wi64_extend32_s: con iota;	#0xc4
-	

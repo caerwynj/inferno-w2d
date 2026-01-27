@@ -473,3 +473,136 @@ disstackext()
 {
 	discon(10*maxframe);
 }
+
+#
+# WASM-specific frame management
+#
+
+wlocals:	array of ref Local;	# WASM local variables (params + locals)
+nwlocals:	int;			# number of WASM locals
+
+#
+# Map WASM type to Dis type.
+#
+
+w2dtype(wtype: int): byte
+{
+	case wtype {
+	I32 =>
+		return DIS_W;
+	I64 or F32 or F64 =>
+		return DIS_L;
+	}
+	return DIS_W;  # default
+}
+
+#
+# Reserve a frame cell for a WASM local variable.
+#
+
+reservewlocal(dtype: byte, ix: int)
+{
+	if(ix >= nwlocals) {
+		oldsz := nwlocals;
+		while(ix >= nwlocals)
+			nwlocals += ALLOCINCR;
+		newlocals := array [nwlocals] of ref Local;
+		for(i := 0; i < oldsz; i++)
+			newlocals[i] = wlocals[i];
+		for(i = oldsz; i < nwlocals; i++)
+			newlocals[i] = ref Local(byte 0, 0, nil);
+		wlocals = newlocals;
+	}
+	if(wlocals[ix].dtype != byte 0)
+		return;  # already reserved
+	wlocals[ix].dtype = dtype;
+	frameoff = align(frameoff, cellsize[int dtype]);
+	wlocals[ix].offset = frameoff;
+	frameoff += cellsize[int dtype];
+}
+
+#
+# Return fp offset of a WASM local variable.
+#
+
+wlocaloffset(ix: int): int
+{
+	if(ix >= nwlocals)
+		fatal("wlocaloffset: bad index " + string ix);
+	return wlocals[ix].offset;
+}
+
+#
+# Return type of a WASM local variable.
+#
+
+wlocaltype(ix: int): byte
+{
+	if(ix >= nwlocals)
+		fatal("wlocaltype: bad index " + string ix);
+	return wlocals[ix].dtype;
+}
+
+#
+# Prepare frame for a WASM function.
+#
+
+wopenframe(functype: ref FuncType, wlocaltypes: array of ref Wlocal)
+{
+	frameoff = REGSIZE;
+	nwlocals = 0;
+
+	# reserve space for parameters
+	for(i := 0; i < len functype.args; i++)
+		reservewlocal(w2dtype(functype.args[i]), i);
+
+	# reserve space for local variables
+	localidx := len functype.args;
+	if(wlocaltypes != nil) {
+		for(i = 0; i < len wlocaltypes; i++) {
+			dtype := w2dtype(wlocaltypes[i].localtyp);
+			for(j := 0; j < wlocaltypes[i].count; j++)
+				reservewlocal(dtype, localidx++);
+		}
+	}
+
+	# align frame and initialize temp pool
+	frameoff = align(frameoff, IBY2WD);
+	tmpslwm = frameoff;
+	tmpssz = frameoff;
+	tmps = array [tmpssz] of { * => Fp(byte 0, 0) };
+}
+
+#
+# Close a WASM function frame.
+#
+
+wcloseframe(): int
+{
+	tid: int;
+
+	# frame size is always a multiple of 8
+	frameoff = align(frameoff, IBY2LG);
+	if(frameoff > maxframe)
+		maxframe = frameoff;
+	tid = wframedesc();
+	wlocals = nil;
+	nwlocals = 0;
+	frameoff = 0;
+	tmpslwm = 0;
+	tmpssz = 0;
+	tmps = nil;
+	return tid;
+}
+
+#
+# Calculate the type descriptor for a WASM frame (no pointers).
+#
+
+wframedesc(): int
+{
+	ln := frameoff / (8*IBY2WD) + (frameoff % (8*IBY2WD) != 0);
+	map := array [ln] of { * => byte 0 };
+	# WASM doesn't have pointer types, so no bits to set
+	return descid(frameoff, ln, map);
+}

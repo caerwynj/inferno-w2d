@@ -210,9 +210,10 @@ instconv(in: ref Inst): string
 		s += addrconv(in.m);
 		comma = ",";
 	}
-	if(in.d.mode != Anone)
+	if(in.d.mode != Anone) {
 		s += comma;
 		s += addrconv(in.d);
+	}
 	return s;
 }
 

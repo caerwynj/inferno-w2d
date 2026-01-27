@@ -2,7 +2,7 @@
 
 WASM to DIS compiler.    
 
-Some code copied from the original Java Class to DIS compiler github.com/caerwynj/inferno-j2d.
+The basic framework is copied from the original Java Class to DIS compiler github.com/caerwynj/inferno-j2d.
 
 The target dis is inferno64 assuming 64bit word size.
 

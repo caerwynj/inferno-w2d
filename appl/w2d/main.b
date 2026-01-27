@@ -47,17 +47,15 @@ translate(in: string, out: string)
 	# Patch instructions for run-time resolution.
 	#doRTpatch();
 
-	return;
-
 	if(gendis == 0) {	# generate .s file
 		asminst();
 		asmentry();
 		asmdesc();
-		asmvar();
+		wasmvar();	# WASM-specific (no module data)
 		asmmod();
 		asmlinks();
 	} else
-		disout();	# generate .dis file
+		wdisout();	# generate .dis file for WASM
 
 	if(gensbl)		#  generate .sbl file
 		sblout(out);

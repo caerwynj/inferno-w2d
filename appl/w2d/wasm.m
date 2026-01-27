@@ -56,9 +56,31 @@ Wlocal: adt {
 	localtyp: int;
 };
 
+# Stack value tracking
+WResult: adt {
+	wtype:	int;		# I32, I64, F32, F64
+	pc:	int;		# instruction index that produced this value
+};
+
+# Control block types
+WBLOCK_BLOCK,
+WBLOCK_LOOP,
+WBLOCK_IF: con iota;
+
+# Control block tracking
+WBlock: adt {
+	kind:		int;		# WBLOCK_BLOCK, WBLOCK_LOOP, WBLOCK_IF
+	startpc:	int;		# instruction index of block start
+	endpc:		int;		# instruction index of block end
+	resulttype:	int;		# block result type (-1 for none)
+	parent:		cyclic ref WBlock;	# enclosing block
+	stackdepth:	int;		# stack depth at block entry
+};
+
 Winst: adt {
 	opcode: int;
 	arg1, arg2: int;
+	dst: ref Addr;		# destination register for this instruction
 };
 
 Wcode:adt {
