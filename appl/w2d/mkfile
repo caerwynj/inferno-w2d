@@ -3,35 +3,23 @@
 TARG=w2d.dis\
 
 MODULES=\
-	java.m\
-	javaisa.m\
-	reloc.m\
+	types.m\
 	$ROOT/appl/cmd/limbo/arg.m\
 	$ROOT/appl/cmd/limbo/isa.m\
 	asm.b\
-	bb.b\
-	datarloc.b\
 	desc.b\
 	dis.b\
+	emit.b\
 	entry.b\
-	finally.b\
 	frame.b\
 	w2d.b\
-	javadas.b\
-	javatbl.b\
 	links.b\
-	loader.b\
-	ltreloc.b\
 	main.b\
-	mdata.b\
 	module.b\
-	patch.b\
-	rtreloc.b\
 	sbl.b\
-	simjvm.b\
-	unify.b\
 	util.b\
-	xlate.b\
+	simwasm.b\
+	wxlate.b\
 	wasm.m\
 	wasmisa.m\
 	optab.m\

@@ -1,4 +1,4 @@
-ihead:	ref Inst;	# first instruction generated for .class file
+ihead:	ref Inst;	# first instruction generated for module
 itail:	ref Inst;	# last instruction (for appending to list)
 
 cache:		array of byte;	# module data cache
@@ -264,21 +264,4 @@ disinst()
 	if(nibuf > 0)
 		bout.write(ibuf, nibuf);
 	ibuf = nil;
-}
-
-disout()
-{
-	discon(XMAGIC);
-	discon(DONTCOMPILE);	# runtime "hints"
-	disstackext();		# minimum stack extent size
-	disninst();
-	disnvar();
-	disndesc();
-	disnlinks();
-	disentry();
-	disinst();
-	disdesc();
-	disvar();
-	dismod();
-	dislinks();
 }

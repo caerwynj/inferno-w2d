@@ -15,7 +15,7 @@ last:	ref Link;
 nlinks:	int;
 
 #
-# Create a Link entry; one for each method defined in the class.
+# Create a Link entry; one for each function defined in the module.
 #
 
 xtrnlink(id: int, pc: int, isig: int, name: string, sig: string)
@@ -31,68 +31,6 @@ xtrnlink(id: int, pc: int, isig: int, name: string, sig: string)
 		last.next = l;
 	last = l;
 	nlinks += 1;
-}
-
-#
-# Functions for patching frame & call instructions.
-#
-
-FCPatch: adt {
-	frame:	ref Inst;
-	call:	ref Inst;
-	name:	string;
-	sig:	string;
-	next:	cyclic ref FCPatch;
-};
-
-fcplist:	ref FCPatch;
-
-#
-# Record a frame/call pair for later patching.
-#
-
-addfcpatch(frame: ref Inst, call: ref Inst, name: string, sig: string)
-{
-	fcp: ref FCPatch;
-
-	fcp = ref FCPatch(frame, call, name, sig, fcplist);
-	fcplist = fcp;
-}
-
-getLink(name: string, sig: string): ref Link
-{
-	l: ref Link;
-	nlen: int;
-
-	nlen = len name;
-	l = links;
-	while(l != nil) {
-		if(len l.name == nlen + len sig
-		&& l.name[0:nlen] == name && l.name[nlen:] == sig) {
-			return l;
-		}
-		l = l.next;
-	}
-	fatal("getLink: " + name + ", " + sig);
-	return nil;
-}
-
-#
-# Patch frame/call pairs.
-#
-
-dofcpatch()
-{
-	fcp: ref FCPatch;
-	l: ref Link;
-
-	fcp = fcplist;
-	while(fcp != nil) {
-		l = getLink(fcp.name, fcp.sig);
-		fcp.frame.s.ival = l.id;
-		fcp.call.d.ival = l.pc;
-		fcp = fcp.next;
-	}
 }
 
 #

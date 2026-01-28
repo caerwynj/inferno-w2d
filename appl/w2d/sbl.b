@@ -28,12 +28,7 @@ sblout(out: string)
 	bsym.puts(SBLVERSION + "\n");
 	bsym.puts(THISCLASS + "\n");
 	bsym.puts("1\n");
-	s: string;
-	if(class.source_file)
-		s = STRING(class.source_file) + "\n";
-	else
-		s = THISCLASS + ".java\n";
-	bsym.puts(s);
+	bsym.puts(THISCLASS + ".wasm\n");
 	sblinst(bsym);			# Dis instructions
 	bsym.puts("0\n");		# adts
 	sbllinks(bsym);			# functions

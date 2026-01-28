@@ -217,26 +217,6 @@ instconv(in: ref Inst): string
 	return s;
 }
 
-ehtable(c: ref Code)
-{
-	i: int;
-	s: string;
-	h: ref Handler;
-
-	if(c.nex == 0)
-		return;
-	bout.puts("#\tException Table\n");
-	for(i = 0; i < c.nex; i++) {
-		h = c.ex[i];
-		if(h.catch_type == 0)
-			s = "*";
-		else
-			s = CLASSNAME(h.catch_type);
-		bout.puts("#\t" + string h.start_pc + " " + string h.end_pc
-			+ " " + string h.handler_pc + " " + s + "\n");
-	}
-}
-
 putinst(i: ref Inst)
 {
 	while(i != nil) {
@@ -247,49 +227,13 @@ putinst(i: ref Inst)
 	}
 }
 
-clinitclone: ref Inst;	# generated <clinit>, <clone> methods
-
 #
-# Emit assembly instructions for a method.
+# Emit assembly instructions.
 #
 
 asminst()
 {
-	i: ref Inst;
-	j: ref Jinst;
-	n, jix: int;
-	c: ref Code;
-
-	if(verbose == 0) {
-		putinst(ihead);
-		return;
-	}
-
-	# -v option
-
-	for(n = 0; n < class.methods_count; n++) {
-		bout.puts("#Method: " + pcode[n].name + pcode[n].sig + "\n");
-		if(pcode[n].code == nil)
-			continue;
-		ehtable(pcode[n].code);
-		c = pcode[n].code;
-		jix = 0;
-		while(jix < c.code_length) {
-			j = c.j[jix];
-			bout.puts("#J" + string j.pc + "\t" + jinstconv(j) + "\n");
-			for(i = j.dis; i != nil && i.j == j; i = i.next) {
-				if(i.pc % 10 == 0)
-					bout.puts("#" + string i.pc + "\n");
-				bout.puts(instconv(i) + "\n");
-			}
-			jix += j.size;
-		}
-	}
-
-	if(clinitclone != nil) {
-		bout.puts("#Method: <clinit|clone>()V\n");
-		putinst(clinitclone);
-	}
+	putinst(ihead);
 }
 
 sblinst(bsym: ref Bufio->Iobuf)
@@ -307,8 +251,8 @@ sblinst(bsym: ref Bufio->Iobuf)
 	lastchar = 6;
 	blockid = -1;
 	for(i = ihead; i != nil; i = i.next) {
-		if(i.j != nil)
-			curline = i.j.line;
+		if(i.line != 0)
+			curline = i.line;
 		if(curline != lastline) {
 			lastline = curline;
 			lastchar = 6;

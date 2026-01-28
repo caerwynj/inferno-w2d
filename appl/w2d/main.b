@@ -8,16 +8,14 @@ fprint, print, sprint: import sys;
 
 gendis:		int = 1;	# generate .dis rather than .s (default)
 fabort:		int;		# -f: cause broken thread on fatal error
-emitcpool:	int;		# -p: emit constant pool (with -S only)
 gensbl:		int;		# -g: generate .sbl file
 compileflag:	int;		# -c (MUSTCOMPILE) & -C (DONTCOMPILE)
-verbose:	int;		# -v: emit Java instructions (with -S only)
 bout:		ref Bufio->Iobuf;
 ofile:		string;
 
 usage()
 {
-	print("usage: w2d [-cgpvCS] [-o outfile] file.wasm\n");
+	print("usage: w2d [-cgCS] [-o outfile] file.wasm\n");
 	exit;
 }
 
@@ -27,7 +25,6 @@ usage()
 
 translate(in: string, out: string)
 {
-	#ClassLoader(in);
 	(m, e) := loadobj(in);
 	if(m == nil)
 		fatal(e);
@@ -36,26 +33,17 @@ translate(in: string, out: string)
 	if(bout == nil)
 		fatal("can't open " + out + ": " + sprint("%r"));
 
-	if(emitcpool != 0)
-		dumpcpool();
-
-	#thisCreloc();
 	wxlate(m);
-	#mpdesc();
-	# Patch frame/call for invokespecial/invokestatic.
-	#dofcpatch();
-	# Patch instructions for run-time resolution.
-	#doRTpatch();
 
 	if(gendis == 0) {	# generate .s file
 		asminst();
 		asmentry();
 		asmdesc();
-		wasmvar();	# WASM-specific (no module data)
+		wasmvar();
 		asmmod();
 		asmlinks();
 	} else
-		wdisout();	# generate .dis file for WASM
+		wdisout();	# generate .dis file
 
 	if(gensbl)		#  generate .sbl file
 		sblout(out);
@@ -142,12 +130,8 @@ init(nil: ref Draw->Context, argv: list of string)
 			gensbl = 1;
 		'f' =>
 			fabort = 1;
-		'p' =>
-			emitcpool = 1;
 		'o' =>
 			ofile = arg.arg();
-		'v' =>
-			verbose = 1;
 		* =>
 			usage();
 		}
@@ -161,11 +145,6 @@ init(nil: ref Draw->Context, argv: list of string)
 	if(compileflag == (_MUSTCOMPILE|_DONTCOMPILE)) {
 		print("w2d: warning: -c and -C are mutually exclusive, ignoring\n");
 		compileflag = 0;
-	}
-	if((verbose != 0 || emitcpool != 0) && gendis != 0) {
-		print("w2d: warning: -p/-v only allowed with -S, ignoring\n");
-		emitcpool = 0;
-		verbose = 0;
 	}
 	if(ofile != nil)
 		translate(ifile, ofile);

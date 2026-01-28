@@ -4,6 +4,7 @@
 *.dis
 *.sbl
 *.swp
+*.s
 .exrc
 CLAUDE.md
 test/*.json
