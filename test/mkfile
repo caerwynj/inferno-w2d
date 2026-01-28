@@ -1,0 +1,20 @@
+<$ROOT/mkconfig
+
+WAST=`{ls *.wast}
+JSON=${WAST:%.wast=%.json}
+WASM=`{ls *.wasm}
+DIS=${WASM:%.wasm=%.dis}
+
+%.json: %.wast
+	wast2json $stem.wast
+
+%.dis: %.wasm
+	inferno wasm/w2d $stem.wasm
+
+all:V:  $JSON $DIS
+
+clean:V:
+	rm -f *.wasm *.json *.dis
+
+test:V:
+	spectest-interp $JSON
