@@ -262,6 +262,18 @@ simwinst(pc: int)
 		# branch table - pops index
 		r = wpop();
 		wreldst(r.pc);
+		# Resolve all branch targets
+		if(Wi.brtable != nil) {
+			Wi.brtargets = array[len Wi.brtable] of int;
+			for(i := 0; i < len Wi.brtable; i++) {
+				labelidx := Wi.brtable[i];
+				blk := wgetlabel(labelidx);
+				if(blk.kind == WBLOCK_LOOP)
+					Wi.brtargets[i] = blk.startpc;
+				else
+					Wi.brtargets[i] = blk.endpc;
+			}
+		}
 
 	Wreturn =>
 		# return pops values based on function return type
@@ -408,9 +420,9 @@ simwinst(pc: int)
 	Wi32_le_s or Wi32_le_u or Wi32_ge_s or Wi32_ge_u =>
 		r2 = wpop();
 		r1 = wpop();
+		wallocdst(pc, I32);
 		wreldst(r2.pc);
 		wreldst(r1.pc);
-		wallocdst(pc, I32);
 		wpush(ref WResult(I32, pc));
 
 	# i64 comparison operations
@@ -424,27 +436,27 @@ simwinst(pc: int)
 	Wi64_le_s or Wi64_le_u or Wi64_ge_s or Wi64_ge_u =>
 		r2 = wpop();
 		r1 = wpop();
+		wallocdst(pc, I32);
 		wreldst(r2.pc);
 		wreldst(r1.pc);
-		wallocdst(pc, I32);
 		wpush(ref WResult(I32, pc));
 
 	# f32 comparison operations
 	Wf32_eq or Wf32_ne or Wf32_lt or Wf32_gt or Wf32_le or Wf32_ge =>
 		r2 = wpop();
 		r1 = wpop();
+		wallocdst(pc, I32);
 		wreldst(r2.pc);
 		wreldst(r1.pc);
-		wallocdst(pc, I32);
 		wpush(ref WResult(I32, pc));
 
 	# f64 comparison operations
 	Wf64_eq or Wf64_ne or Wf64_lt or Wf64_gt or Wf64_le or Wf64_ge =>
 		r2 = wpop();
 		r1 = wpop();
+		wallocdst(pc, I32);
 		wreldst(r2.pc);
 		wreldst(r1.pc);
-		wallocdst(pc, I32);
 		wpush(ref WResult(I32, pc));
 
 	# i32 unary operations
@@ -460,9 +472,13 @@ simwinst(pc: int)
 	Wi32_shl or Wi32_shr_s or Wi32_shr_u or Wi32_rotl or Wi32_rotr =>
 		r2 = wpop();
 		r1 = wpop();
+		# Allocate destination BEFORE releasing sources to avoid reusing source registers
+		wallocdst(pc, I32);
+		# Record source instruction PCs for translation
+		Wi.src1pc = r1.pc;
+		Wi.src2pc = r2.pc;
 		wreldst(r2.pc);
 		wreldst(r1.pc);
-		wallocdst(pc, I32);
 		wpush(ref WResult(I32, pc));
 
 	# i64 unary operations
@@ -478,9 +494,13 @@ simwinst(pc: int)
 	Wi64_shl or Wi64_shr_s or Wi64_shr_u or Wi64_rotl or Wi64_rotr =>
 		r2 = wpop();
 		r1 = wpop();
+		# Allocate destination BEFORE releasing sources to avoid reusing source registers
+		wallocdst(pc, I64);
+		# Record source instruction PCs for translation
+		Wi.src1pc = r1.pc;
+		Wi.src2pc = r2.pc;
 		wreldst(r2.pc);
 		wreldst(r1.pc);
-		wallocdst(pc, I64);
 		wpush(ref WResult(I64, pc));
 
 	# f32 unary operations
@@ -495,9 +515,13 @@ simwinst(pc: int)
 	Wf32_add or Wf32_sub or Wf32_mul or Wf32_div or Wf32_min or Wf32_max or Wf32_copysign =>
 		r2 = wpop();
 		r1 = wpop();
+		# Allocate destination BEFORE releasing sources to avoid reusing source registers
+		wallocdst(pc, F32);
+		# Record source instruction PCs for translation
+		Wi.src1pc = r1.pc;
+		Wi.src2pc = r2.pc;
 		wreldst(r2.pc);
 		wreldst(r1.pc);
-		wallocdst(pc, F32);
 		wpush(ref WResult(F32, pc));
 
 	# f64 unary operations
@@ -512,9 +536,13 @@ simwinst(pc: int)
 	Wf64_add or Wf64_sub or Wf64_mul or Wf64_div or Wf64_min or Wf64_max or Wf64_copysign =>
 		r2 = wpop();
 		r1 = wpop();
+		# Allocate destination BEFORE releasing sources to avoid reusing source registers
+		wallocdst(pc, F64);
+		# Record source instruction PCs for translation
+		Wi.src1pc = r1.pc;
+		Wi.src2pc = r2.pc;
 		wreldst(r2.pc);
 		wreldst(r1.pc);
-		wallocdst(pc, F64);
 		wpush(ref WResult(F64, pc));
 
 	# conversions

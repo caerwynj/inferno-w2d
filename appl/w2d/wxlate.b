@@ -22,6 +22,7 @@ wfuncsig(ft: ref FuncType): int
 	i: int;
 
 	# Build signature string like f(i,i)i
+	# Limbo signature format: f(params)return where return is 'n' for void
 	s := "f(";
 	for(i = 0; i < len ft.args; i++) {
 		if(i > 0)
@@ -29,8 +30,12 @@ wfuncsig(ft: ref FuncType): int
 		s += wsigchar(ft.args[i]);
 	}
 	s += ")";
-	for(i = 0; i < len ft.rets; i++)
-		s += wsigchar(ft.rets[i]);
+	if(len ft.rets == 0)
+		s += "n";  # Tnone = void return
+	else {
+		for(i = 0; i < len ft.rets; i++)
+			s += wsigchar(ft.rets[i]);
+	}
 
 	# MD5 hash
 	buf := array of byte s;
@@ -122,8 +127,14 @@ wsrc(n: int): ref Addr
 xi32binop(disop: int)
 {
 	i := newi(disop);
-	*i.s = *wsrc(1);	# first operand (deeper in stack)
-	*i.m = *wsrc(0);	# second operand (top of stack)
+	# Use recorded source PCs from simulation instead of wsrc
+	if(Wi.src1pc >= 0 && Wi.src2pc >= 0) {
+		*i.s = *wcodes[Wi.src1pc].dst;
+		*i.m = *wcodes[Wi.src2pc].dst;
+	} else {
+		*i.s = *wsrc(1);	# first operand (deeper in stack)
+		*i.m = *wsrc(0);	# second operand (top of stack)
+	}
 	*i.d = *Wi.dst;
 }
 
@@ -134,8 +145,14 @@ xi32binop(disop: int)
 xi64binop(disop: int)
 {
 	i := newi(disop);
-	*i.s = *wsrc(1);
-	*i.m = *wsrc(0);
+	# Use recorded source PCs from simulation instead of wsrc
+	if(Wi.src1pc >= 0 && Wi.src2pc >= 0) {
+		*i.s = *wcodes[Wi.src1pc].dst;
+		*i.m = *wcodes[Wi.src2pc].dst;
+	} else {
+		*i.s = *wsrc(1);
+		*i.m = *wsrc(0);
+	}
 	*i.d = *Wi.dst;
 }
 
@@ -146,8 +163,14 @@ xi64binop(disop: int)
 xfbinop(disop: int)
 {
 	i := newi(disop);
-	*i.s = *wsrc(1);
-	*i.m = *wsrc(0);
+	# Use recorded source PCs from simulation instead of wsrc
+	if(Wi.src1pc >= 0 && Wi.src2pc >= 0) {
+		*i.s = *wcodes[Wi.src1pc].dst;
+		*i.m = *wcodes[Wi.src2pc].dst;
+	} else {
+		*i.s = *wsrc(1);
+		*i.m = *wsrc(0);
+	}
 	*i.d = *Wi.dst;
 }
 
@@ -332,6 +355,27 @@ xlatwinst()
 		addrimm(i.m, 0);
 		addrimm(i.d, 0);  # target patched later
 		Wi.disinst = i;
+
+	Wbr_table =>
+		# br_table instruction - generate cascading conditional branches
+		# brtable array has labels[0..n-1] followed by default label at [n]
+		if(Wi.brtable != nil && Wi.brtargets != nil) {
+			nlabels := len Wi.brtable - 1;  # exclude default
+			Wi.brinsts = array[nlabels + 1] of ref Inst;
+			# Generate conditional branches for each label index
+			for(bi := 0; bi < nlabels; bi++) {
+				# If index == bi, jump to labels[bi]
+				ibr := newi(IBEQW);
+				*ibr.s = *wsrc(0);  # index from stack
+				addrimm(ibr.m, bi);
+				addrimm(ibr.d, 0);  # target patched later
+				Wi.brinsts[bi] = ibr;
+			}
+			# Default branch (unconditional jump)
+			ijmp := newi(IJMP);
+			addrimm(ijmp.d, 0);  # target patched later
+			Wi.brinsts[nlabels] = ijmp;
+		}
 
 	Wreturn =>
 		# Copy return value if any
@@ -979,6 +1023,18 @@ wpatchbranches(codes: array of ref Winst)
 				wpatchbranch(w, w.targetpc);
 		Wbr or Wbr_if =>
 			wpatchbranch(w, w.targetpc);
+		Wbr_table =>
+			# Patch all br_table targets
+			if(w.brinsts != nil && w.brtargets != nil) {
+				for(bi := 0; bi < len w.brinsts; bi++) {
+					if(w.brinsts[bi] != nil) {
+						targetpc := w.brtargets[bi];
+						dispc := wlabels[targetpc];
+						if(dispc >= 0)
+							addrimm(w.brinsts[bi].d, dispc);
+					}
+				}
+			}
 		}
 	}
 }

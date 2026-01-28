@@ -87,6 +87,13 @@ Winst: adt {
 	branchsrc: ref Addr;	# value to copy as block result (for typed blocks)
 	elsepc: int;		# WASM PC of else clause (for if blocks)
 	disinst: ref Inst;	# Dis instruction for patching (for branches)
+	# br_table specific fields
+	brtable: array of int;	# label targets for br_table
+	brtargets: array of int;	# resolved WASM PC targets (set during simulation)
+	brinsts: array of ref Inst;	# Dis instructions for patching br_table branches
+	# Source operand tracking (set during simulation for operations)
+	src1pc: int;		# WASM PC of instruction producing first operand
+	src2pc: int;		# WASM PC of instruction producing second operand
 };
 
 Wcode:adt {
