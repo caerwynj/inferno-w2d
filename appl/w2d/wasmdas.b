@@ -152,12 +152,12 @@ loadobj(wasmfile: string): (ref Mod, string)
 						blocktype := getb();
 						depth++;
 						if(DEBUG)sys->print("%s 0x%x\n", optab[opcode], blocktype);
-						l = ref Winst(opcode, blocktype, -1, nil) :: l;
+						l = ref Winst(opcode, blocktype, -1, nil, 0, 0, nil, -1, nil) :: l;
 					Wend =>
 						depth--;
 						if(depth > 0) {
 							if(DEBUG)sys->print("%s\n", optab[opcode]);
-							l = ref Winst(opcode, -1, -1, nil) :: l;
+							l = ref Winst(opcode, -1, -1, nil, 0, 0, nil, -1, nil) :: l;
 						}
 					Wi32_load or Wi64_load or Wf32_load or Wf64_load or
 					Wi32_load8_s or Wi32_load8_u or Wi32_load16_s or Wi32_load16_u or
@@ -169,42 +169,42 @@ loadobj(wasmfile: string): (ref Mod, string)
 						align := operand();
 						offset := operand();
 						if(DEBUG)sys->print("%s %d %d\n", optab[opcode], align, offset);
-						l = ref Winst(opcode, align, offset, nil) :: l;
+						l = ref Winst(opcode, align, offset, nil, 0, 0, nil, -1, nil) :: l;
 					Wlocal_get or Wlocal_set or Wlocal_tee or Wglobal_get or Wglobal_set =>
 						n := operand();
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1, nil) :: l;
+						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil) :: l;
 					Wbr or Wbr_if or Wcall =>
 						idx := operand();
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], idx);
-						l = ref Winst(opcode, idx, -1, nil) :: l;
+						l = ref Winst(opcode, idx, -1, nil, 0, 0, nil, -1, nil) :: l;
 					Wcall_indirect =>
 						tidx := operand();
 						tabidx := operand();
 						if(DEBUG)sys->print("%s %d %d\n", optab[opcode], tidx, tabidx);
-						l = ref Winst(opcode, tidx, tabidx, nil) :: l;
+						l = ref Winst(opcode, tidx, tabidx, nil, 0, 0, nil, -1, nil) :: l;
 					Wbr_table =>
 						count := operand();
 						for(bi := 0; bi <= count; bi++)
 							operand();
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], count);
-						l = ref Winst(opcode, count, -1, nil) :: l;
+						l = ref Winst(opcode, count, -1, nil, 0, 0, nil, -1, nil) :: l;
 					Wi32_const or Wi64_const =>
 						n := operand();
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1, nil) :: l;
+						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil) :: l;
 					Wf32_const =>
 						n := getw();
 						if(DEBUG)sys->print("%s 0x%x\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1, nil) :: l;
+						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil) :: l;
 					Wf64_const =>
 						nlo := getw();
 						nhi := getw();
 						if(DEBUG)sys->print("%s 0x%x 0x%x\n", optab[opcode], nhi, nlo);
-						l = ref Winst(opcode, nlo, nhi, nil) :: l;
+						l = ref Winst(opcode, nlo, nhi, nil, 0, 0, nil, -1, nil) :: l;
 					* =>
 						if(DEBUG)sys->print("%s\n", optab[opcode]);
-						l = ref Winst(opcode, -1, -1, nil) :: l;
+						l = ref Winst(opcode, -1, -1, nil, 0, 0, nil, -1, nil) :: l;
 						;
 					}
 					if(depth > 0)
@@ -215,6 +215,20 @@ loadobj(wasmfile: string): (ref Mod, string)
 				for(k := len l - 1; l != nil; l = tl l) 
 					rl[k--] = hd l;
 				m.codesection.codes[i++] = ref Wcode(codesize, locs, rl);
+			}
+		SEXPORT =>
+			m.exportsection = ref ExportSection;
+			m.exportsection.size = slen;
+			vlen := operand();
+			m.exportsection.exports = array[vlen] of ref Export;
+			i := 0;
+			while (vlen > 0) {
+				name := gets();
+				kind := getb();
+				idx := operand();
+				if(DEBUG)sys->print("EXPORT: %s kind=%d idx=%d\n", name, kind, idx);
+				m.exportsection.exports[i++] = ref Export(name, kind, idx);
+				vlen--;
 			}
 		* =>
 			wasmptr += slen;

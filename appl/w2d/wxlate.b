@@ -276,21 +276,62 @@ xlatwinst()
 	Wnop =>
 		i = newi(INOP);
 
-	# control flow - handled specially
-	Wblock or Wloop or Wif or Welse or Wend =>
-		;  # control flow structure, no direct instruction
+	# control flow
+	Wblock or Wloop =>
+		;  # block/loop markers, no direct instruction
+
+	Wif =>
+		# Generate conditional branch: if condition == 0, jump to else or end
+		i = newi(IBEQW);
+		*i.s = *wsrc(0);
+		addrimm(i.m, 0);
+		addrimm(i.d, 0);  # target patched later
+		Wi.disinst = i;
+
+	Welse =>
+		# For then branch: copy result value to return area before jumping
+		if(Wi.branchsrc != nil) {
+			imov := newi(wmovinst(Wi.targettype));
+			*imov.s = *Wi.branchsrc;
+			addrdind(imov.d, Afpind, WREGRET, 0);
+		}
+		# Generate unconditional jump to skip else block (for then branch)
+		i = newi(IJMP);
+		addrimm(i.d, 0);  # target patched later
+		Wi.disinst = i;
+		# Record where else body actually starts (after the jmp)
+		# This is used by Wif to know where to branch
+		Wi.elsepc = pcdis;
+
+	Wend =>
+		;  # end marker, no direct instruction
 
 	Wbr =>
+		# If target block has result type, copy value first
+		if(Wi.branchsrc != nil) {
+			imov := newi(wmovinst(Wi.targettype));
+			*imov.s = *Wi.branchsrc;
+			addrdind(imov.d, Afpind, WREGRET, 0);
+		}
 		i = newi(IJMP);
-		# target will be patched later
-		addrimm(i.d, Wi.arg1);  # temporarily store label index
+		addrimm(i.d, 0);  # target patched later
+		Wi.disinst = i;
 
 	Wbr_if =>
-		# Branch if top of stack is non-zero
+		# If target block has result type, we need special handling
+		# The value to keep is below the condition on stack
+		if(Wi.branchsrc != nil) {
+			# Copy value to return area, then branch if condition != 0
+			imov := newi(wmovinst(Wi.targettype));
+			*imov.s = *Wi.branchsrc;
+			addrdind(imov.d, Afpind, WREGRET, 0);
+		}
+		# Branch if top of stack (condition) is non-zero
 		i = newi(IBNEW);
 		*i.s = *wsrc(0);
 		addrimm(i.m, 0);
-		addrimm(i.d, Wi.arg1);  # temporarily store label index
+		addrimm(i.d, 0);  # target patched later
+		Wi.disinst = i;
 
 	Wreturn =>
 		# Copy return value if any
@@ -871,6 +912,78 @@ xlatwinst()
 }
 
 #
+# Patch a branch instruction's target to the correct Dis PC.
+#
+
+DEBUG_PATCH: con 0;
+
+wpatchbranch(w: ref Winst, targetpc: int)
+{
+	if(w.disinst == nil) {
+		if(DEBUG_PATCH)
+			sys->print("  wpatchbranch: disinst is nil\n");
+		return;
+	}
+	if(targetpc < 0 || targetpc > len wcodes) {
+		fatal("wpatchbranch: invalid target " + string targetpc);
+		return;
+	}
+	dispc := wlabels[targetpc];
+	if(dispc < 0) {
+		fatal("wpatchbranch: unresolved label for WASM PC " + string targetpc);
+		return;
+	}
+	if(DEBUG_PATCH)
+		sys->print("  patch opcode %d: wasm targetpc=%d -> dis pc=%d\n", w.opcode, targetpc, dispc);
+	addrimm(w.disinst.d, dispc);
+}
+
+#
+# Patch all branch targets after translation.
+#
+
+wpatchbranches(codes: array of ref Winst)
+{
+	for(pc := 0; pc < len codes; pc++) {
+		w := codes[pc];
+		case w.opcode {
+		Wif =>
+			# If there's an else clause, jump to else body; otherwise jump to end
+			if(DEBUG_PATCH)
+				sys->print("  Wif at wpc %d: elsepc=%d, targetpc=%d\n", pc, w.elsepc, w.targetpc);
+			if(w.elsepc >= 0) {
+				# Find the Welse instruction and get the actual else body start
+				elseInst := codes[w.elsepc];
+				if(elseInst.elsepc > 0) {
+					# elseInst.elsepc was set during translation to the Dis PC of else body
+					if(DEBUG_PATCH)
+						sys->print("    -> using else body dis pc=%d\n", elseInst.elsepc);
+					addrimm(w.disinst.d, elseInst.elsepc);
+				} else
+					wpatchbranch(w, w.elsepc);
+			} else
+				wpatchbranch(w, w.targetpc);
+		Welse =>
+			if(DEBUG_PATCH)
+				sys->print("  Welse at wpc %d: targetpc=%d, branchsrc=%x, elsepc(dis)=%d\n", pc, w.targetpc, w.branchsrc != nil, w.elsepc);
+			# If then branch already copied to return area, skip epilogue and jump to ret
+			if(w.branchsrc != nil) {
+				# Jump past epilogue (+1 for copy instruction, lands on ret)
+				dispc := wlabels[w.targetpc];
+				if(dispc >= 0) {
+					if(DEBUG_PATCH)
+						sys->print("    -> skipping epilogue, jmp to dis pc=%d\n", dispc + 1);
+					addrimm(w.disinst.d, dispc + 1);
+				}
+			} else
+				wpatchbranch(w, w.targetpc);
+		Wbr or Wbr_if =>
+			wpatchbranch(w, w.targetpc);
+		}
+	}
+}
+
+#
 # Translate all WASM instructions for a function to Dis.
 #
 
@@ -886,6 +999,9 @@ wasm2dis(codes: array of ref Winst)
 
 	# Record final label
 	wlabels[len codes] = pcdis;
+
+	# Patch all branch targets
+	wpatchbranches(codes);
 }
 
 #
@@ -1056,6 +1172,9 @@ wxlate(m: ref Mod)
 		# Record start PC for this function
 		funcpc := pcdis;
 
+		# Initialize local variables to 0 (WASM requires this)
+		winitlocals(functype, wcode.locals);
+
 		# Simulate to allocate frame positions
 		simwasm(wcode.code, functype);
 
@@ -1063,16 +1182,10 @@ wxlate(m: ref Mod)
 		wasm2dis(wcode.code);
 
 		# Copy return value to return location if function returns a value
-		if(len functype.rets > 0) {
-			# Find the last instruction that produced a value (has non-nil dst)
-			for(pc := len wcode.code - 1; pc >= 0; pc--) {
-				if(wcode.code[pc].dst != nil) {
-					imov := newi(wmovinst(functype.rets[0]));
-					*imov.s = *wcode.code[pc].dst;
-					addrdind(imov.d, Afpind, WREGRET, 0);
-					break;
-				}
-			}
+		if(len functype.rets > 0 && wreturnaddr != nil) {
+			imov := newi(wmovinst(functype.rets[0]));
+			*imov.s = *wreturnaddr;
+			addrdind(imov.d, Afpind, WREGRET, 0);
 		}
 
 		# Add return instruction at end
@@ -1082,8 +1195,17 @@ wxlate(m: ref Mod)
 		# Close frame and get type descriptor
 		tid := wcloseframe();
 
-		# Create link for this function
+		# Create link for this function - use export name if available
 		funcname := sys->sprint("func%d", i);
+		if(m.exportsection != nil) {
+			for(j := 0; j < len m.exportsection.exports; j++) {
+				exp := m.exportsection.exports[j];
+				if(exp.kind == 0 && exp.idx == i) {  # kind 0 = function
+					funcname = sanitizename(exp.name);
+					break;
+				}
+			}
+		}
 		xtrnlink(tid, funcpc, wfuncsig(functype), funcname, "");
 	}
 

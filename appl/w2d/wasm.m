@@ -81,6 +81,12 @@ Winst: adt {
 	opcode: int;
 	arg1, arg2: int;
 	dst: ref Addr;		# destination register for this instruction
+	# Branch target info (set during simulation for br/br_if/if/else)
+	targetpc: int;		# WASM PC of branch target
+	targettype: int;	# result type of target block (-1 or 0x40 for void)
+	branchsrc: ref Addr;	# value to copy as block result (for typed blocks)
+	elsepc: int;		# WASM PC of else clause (for if blocks)
+	disinst: ref Inst;	# Dis instruction for patching (for branches)
 };
 
 Wcode:adt {
@@ -99,6 +105,17 @@ CodeSection: adt {
 	codes: array of ref Wcode;
 };
 
+Export: adt {
+	name: string;
+	kind: int;	# 0=func, 1=table, 2=mem, 3=global
+	idx: int;
+};
+
+ExportSection: adt {
+	size: int;
+	exports: array of ref Export;
+};
+
 Mod: adt
 {
 	magic:  	int;
@@ -108,4 +125,5 @@ Mod: adt
 	typesection: ref TypeSection;
 	funcsection: ref FuncSection;
 	codesection: ref CodeSection;
+	exportsection: ref ExportSection;
 };

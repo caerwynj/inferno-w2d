@@ -14,6 +14,8 @@ ctos:		int;			# control stack top
 wfunctype:	ref FuncType;		# current function's type
 wcode:		array of ref Winst;	# current function's code
 
+wreturnaddr:	ref Addr;		# address of function return value (stack top at end)
+
 #
 # Push a result onto the simulated stack.
 #
@@ -193,10 +195,25 @@ simwinst(pc: int)
 		r = wpop();
 		wreldst(r.pc);
 		endpc := wfindend(pc);
+		elsepc := wfindelse(pc);
 		wpushcontrol(WBLOCK_IF, pc, endpc, Wi.arg1);
+		# Record branch targets for code generation
+		Wi.targetpc = endpc;
+		Wi.targettype = Wi.arg1;
+		Wi.elsepc = elsepc;
 
 	Welse =>
-		;  # handled by control flow, stack already adjusted
+		# Record jump target (end of if block) for the then branch
+		if(ctos > 0) {
+			blk := cstack[ctos-1];
+			Wi.targetpc = blk.endpc;
+			Wi.targettype = blk.resulttype;
+			# If block has result type, capture the then branch's value
+			if(blk.resulttype != -1 && blk.resulttype != 16r40 && wtos > 0) {
+				r = wpeek(0);
+				Wi.branchsrc = wgetsrc(r);
+			}
+		}
 
 	Wend =>
 		if(ctos > 0) {
@@ -209,12 +226,37 @@ simwinst(pc: int)
 
 	Wbr =>
 		# unconditional branch - label index in arg1
-		;
+		labelidx := Wi.arg1;
+		blk := wgetlabel(labelidx);
+		# For loops, branch to start; for blocks/if, branch to end
+		if(blk.kind == WBLOCK_LOOP)
+			Wi.targetpc = blk.startpc;
+		else
+			Wi.targetpc = blk.endpc;
+		Wi.targettype = blk.resulttype;
+		# If target block has result type, capture the value source
+		if(blk.resulttype != -1 && blk.resulttype != 16r40 && wtos > 0) {
+			r = wpeek(0);
+			Wi.branchsrc = wgetsrc(r);
+		}
 
 	Wbr_if =>
 		# conditional branch - pops condition
 		r = wpop();
 		wreldst(r.pc);
+		labelidx := Wi.arg1;
+		blk := wgetlabel(labelidx);
+		if(blk.kind == WBLOCK_LOOP)
+			Wi.targetpc = blk.startpc;
+		else
+			Wi.targetpc = blk.endpc;
+		Wi.targettype = blk.resulttype;
+		# If target block has result type, the "kept" value is below the condition
+		# Note: we already popped condition, so wpeek(0) is the kept value
+		if(blk.resulttype != -1 && blk.resulttype != 16r40 && wtos > 0) {
+			r = wpeek(0);
+			Wi.branchsrc = wgetsrc(r);
+		}
 
 	Wbr_table =>
 		# branch table - pops index
@@ -579,12 +621,19 @@ simwasm(code: array of ref Winst, functype: ref FuncType)
 	ctos = 0;
 	wfunctype = functype;
 	wcode = code;
+	wreturnaddr = nil;
 
 	# push implicit function block
 	wpushcontrol(WBLOCK_BLOCK, -1, len code - 1, -1);
 
 	for(pc := 0; pc < len code; pc++)
 		simwinst(pc);
+
+	# Record the return value source (stack top at function end)
+	if(len functype.rets > 0 && wtos > 0) {
+		r := wstack[wtos - 1];
+		wreturnaddr = wgetsrc(r);
+	}
 
 	wstack = nil;
 	cstack = nil;
