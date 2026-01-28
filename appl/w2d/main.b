@@ -132,6 +132,8 @@ init(nil: ref Draw->Context, argv: list of string)
 			fabort = 1;
 		'o' =>
 			ofile = arg.arg();
+		'd' =>
+			DEBUG = 1;
 		* =>
 			usage();
 		}

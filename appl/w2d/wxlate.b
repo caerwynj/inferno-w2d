@@ -485,20 +485,35 @@ xlatwinst()
 	# numeric instructions - constants
 	Wi32_const =>
 		i = newi(IMOVW);
-		addrimm(i.s, Wi.arg1);
+		if(notimmable(Wi.arg1)) {
+			off := mpword(Wi.arg1);
+			addrsind(i.s, Amp, off);
+		} else
+			addrimm(i.s, Wi.arg1);
 		*i.d = *Wi.dst;
 
 	Wi64_const =>
+		# 64-bit constants go in module data
 		i = newi(IMOVL);
-		# For 64-bit, we might need module data for large values
-		addrimm(i.s, Wi.arg1);
+		off := mpbig(big Wi.arg1);
+		addrsind(i.s, Amp, off);
 		*i.d = *Wi.dst;
 
-	Wf32_const or Wf64_const =>
-		# Floating point constants need module data
-		# For now, use immediate (will only work for small values)
+	Wf32_const =>
+		# Convert f32 bits to real and store in module data
+		rv := math->bits32real(Wi.arg1);
+		off := mpreal(rv);
 		i = newi(IMOVF);
-		addrimm(i.s, Wi.arg1);
+		addrsind(i.s, Amp, off);
+		*i.d = *Wi.dst;
+
+	Wf64_const =>
+		# Reconstruct f64 bits and convert to real
+		bv := big Wi.arg1 | (big Wi.arg2 << 32);
+		rv := math->bits64real(bv);
+		off := mpreal(rv);
+		i = newi(IMOVF);
+		addrsind(i.s, Amp, off);
 		*i.d = *Wi.dst;
 
 	# i32 comparison operations
@@ -880,30 +895,106 @@ wasm2dis(codes: array of ref Winst)
 WREGRET: con 32;  # Return value goes at offset REGRET*IBY2WD = 4*8 = 32
 
 #
-# WASM-specific module data size (no module data for now)
+# Module data for constants (floats and large integers)
+#
+
+MpConst: adt {
+	off:	int;
+	kind:	int;	# DEFW, DEFF, or DEFL
+	ival:	int;
+	rval:	real;
+	bval:	big;
+};
+
+mpconsts:	list of ref MpConst;
+mpoff:		int;
+
+#
+# Allocate a real (64-bit float) in module data.
+#
+
+mpreal(v: real): int
+{
+	mpoff = align(mpoff, IBY2LG);
+	off := mpoff;
+	mpoff += IBY2LG;
+	mpconsts = ref MpConst(off, DEFF, 0, v, big 0) :: mpconsts;
+	return off;
+}
+
+#
+# Allocate a word (32-bit int) in module data.
+#
+
+mpword(v: int): int
+{
+	mpoff = align(mpoff, IBY2WD);
+	off := mpoff;
+	mpoff += IBY2WD;
+	mpconsts = ref MpConst(off, DEFW, v, 0.0, big 0) :: mpconsts;
+	return off;
+}
+
+#
+# Allocate a big (64-bit int) in module data.
+#
+
+mpbig(v: big): int
+{
+	mpoff = align(mpoff, IBY2LG);
+	off := mpoff;
+	mpoff += IBY2LG;
+	mpconsts = ref MpConst(off, DEFL, 0, 0.0, v) :: mpconsts;
+	return off;
+}
+
+#
+# WASM-specific module data size
 #
 
 wdisnvar()
 {
-	discon(0);  # no module data
+	discon(mpoff);
 }
 
 #
-# WASM-specific var directive for assembly output (no module data)
+# WASM-specific var directive for assembly output
 #
 
 wasmvar()
 {
-	bout.puts("\tvar\t@mp,0\n");
+	bout.puts("\tvar\t@mp," + string mpoff + "\n");
 }
 
 #
-# WASM-specific module data output (empty for now)
+# WASM-specific module data output
 #
 
 wdisvar()
 {
-	# no module data to write, but must terminate the data section
+	# Output module data constants in offset order
+	# First reverse the list to get forward order
+	rl: list of ref MpConst;
+	for(l := mpconsts; l != nil; l = tl l)
+		rl = hd l :: rl;
+
+	# Write each constant
+	for(; rl != nil; rl = tl rl) {
+		c := hd rl;
+		case c.kind {
+		DEFW =>
+			disint(c.off, c.ival);
+		DEFF =>
+			disreal(c.off, c.rval);
+		DEFL =>
+			dislong(c.off, c.bval);
+		}
+	}
+
+	# Flush any remaining cached data
+	disflush(-1, -1, 0);
+
+	# Terminate the data section
 	bout.putb(byte 0);
 }
 
@@ -948,8 +1039,9 @@ wxlate(m: ref Mod)
 	nlinks = 0;
 	links = nil;
 
-	# Create module data descriptor (id=0) for WASM (empty, no pointers)
-	mpdescid(0, 0, array [0] of byte);
+	# Reset module data state
+	mpoff = 0;
+	mpconsts = nil;
 
 	for(i := 0; i < len m.codesection.codes; i++) {
 		wcode := m.codesection.codes[i];
@@ -994,6 +1086,12 @@ wxlate(m: ref Mod)
 		funcname := sys->sprint("func%d", i);
 		xtrnlink(tid, funcpc, wfuncsig(functype), funcname, "");
 	}
+
+	# Create module data descriptor (id=0) for WASM
+	# WASM has no pointer types, so the map is all zeros
+	mpoff = align(mpoff, IBY2LG);
+	maplen := mpoff / (8*IBY2WD) + (mpoff % (8*IBY2WD) != 0);
+	mpdescid(mpoff, maplen, array[maplen] of { * => byte 0 });
 
 	# Set first function as entry point if no main was found
 	if(pc == -1 && nlinks > 0)

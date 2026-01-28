@@ -1,4 +1,6 @@
 
+DEBUG := 0;
+
 wasmptr: int;
 wasmobj: array of byte;
 
@@ -32,26 +34,26 @@ loadobj(wasmfile: string): (ref Mod, string)
 	while(wasmptr < len wasmobj) {
 		section := operand();
 		slen := operand();
-		sys->print("%s len %d\n", sectab[section], slen);
+		if(DEBUG)sys->print("%s len %d\n", sectab[section], slen);
 
 		case section {
 		STYPE =>
 			m.typesection = ref TypeSection;
 			m.typesection.size = slen;
 			vlen := operand();
-			sys->print("TYPE vlen %d\n", vlen);
+			if(DEBUG)sys->print("TYPE vlen %d\n", vlen);
 			m.typesection.types = array[vlen] of {* => ref FuncType(nil, nil)};
 			t := 0;
 			while (vlen > 0) {
 				b := getb();
-				sys->print("functype %x\n", b);
+				if(DEBUG)sys->print("functype %x\n", b);
 				vallen := operand();
 				ta := array[vallen] of int;
 				i := 0;
 				while(vallen > 0) {
 					vb := getb();
 					ta[i++] = vb;
-					sys->print("arg typ %x\n", vb);
+					if(DEBUG)sys->print("arg typ %x\n", vb);
 					vallen--;
 				}
 				m.typesection.types[t].args = ta;
@@ -61,7 +63,7 @@ loadobj(wasmfile: string): (ref Mod, string)
 				while(vallen > 0) {
 					vb := getb();
 					ta[i++] = vb;	
-					sys->print("res typ %x\n", vb);
+					if(DEBUG)sys->print("res typ %x\n", vb);
 					vallen--;
 				}
 				m.typesection.types[t].rets = ta;	
@@ -78,7 +80,7 @@ loadobj(wasmfile: string): (ref Mod, string)
 				modname := gets();
 				name := gets();
 				desc := getb();
-				sys->print("IMPORT: %s %s %d\n", modname, name, desc);
+				if(DEBUG)sys->print("IMPORT: %s %s %d\n", modname, name, desc);
 				case desc {
 				16r0 =>
 					typeidx := operand();
@@ -115,8 +117,8 @@ loadobj(wasmfile: string): (ref Mod, string)
 			m.funcsection.funcs = array[vlen] of int;
 			i := 0;
 			while (vlen > 0) {
-				typeidx := getb();
-				sys->print("SFUNC %d\n", typeidx);
+				typeidx := operand();
+				if(DEBUG)sys->print("SFUNC %d\n", typeidx);
 				m.funcsection.funcs[i++] = typeidx;
 				vlen--;
 			}
@@ -130,21 +132,33 @@ loadobj(wasmfile: string): (ref Mod, string)
 			while (vlen > 0) {
 				codesize := operand();
 				localsize := operand();
-				sys->print("vlen %d code len %d bytes; codesize %d, localsize %d\n", vlen, slen, codesize, localsize);
+				if(DEBUG)sys->print("vlen %d code len %d bytes; codesize %d, localsize %d\n", vlen, slen, codesize, localsize);
 				locs := array[localsize] of ref Wlocal;
 				j := 0;
 				while(localsize > 0){
 					localcnt := operand();
 					localtyp := getb();
-					sys->print("local %d 0x%x\n", localcnt, localtyp);
+					if(DEBUG)sys->print("local %d 0x%x\n", localcnt, localtyp);
 					locs[j++] = ref Wlocal(localcnt, localtyp);
 					localsize--;
 				}
-				opcode := getb();
+				depth := 1;
 				l : list of ref Winst;
-				while(opcode != 16r0b){
+				opcode := getb();
+				while(depth > 0){
 					#sys->print("opcode 0x%x %s\n", opcode, optab[opcode]);
 					case opcode {
+					Wblock or Wloop or Wif =>
+						blocktype := getb();
+						depth++;
+						if(DEBUG)sys->print("%s 0x%x\n", optab[opcode], blocktype);
+						l = ref Winst(opcode, blocktype, -1, nil) :: l;
+					Wend =>
+						depth--;
+						if(depth > 0) {
+							if(DEBUG)sys->print("%s\n", optab[opcode]);
+							l = ref Winst(opcode, -1, -1, nil) :: l;
+						}
 					Wi32_load or Wi64_load or Wf32_load or Wf64_load or
 					Wi32_load8_s or Wi32_load8_u or Wi32_load16_s or Wi32_load16_u or
 					Wi64_load8_s or Wi64_load8_u or Wi64_load16_s or Wi64_load16_u or
@@ -154,30 +168,47 @@ loadobj(wasmfile: string): (ref Mod, string)
 					=>
 						align := operand();
 						offset := operand();
-						sys->print("%s %d %d\n", optab[opcode], align, offset);
+						if(DEBUG)sys->print("%s %d %d\n", optab[opcode], align, offset);
 						l = ref Winst(opcode, align, offset, nil) :: l;
 					Wlocal_get or Wlocal_set or Wlocal_tee or Wglobal_get or Wglobal_set =>
 						n := operand();
-						sys->print("%s %d\n", optab[opcode], n);
+						if(DEBUG)sys->print("%s %d\n", optab[opcode], n);
 						l = ref Winst(opcode, n, -1, nil) :: l;
-					Wbr or Wbr_if or Wcall or Wcall_indirect =>
+					Wbr or Wbr_if or Wcall =>
 						idx := operand();
-						sys->print("%s %d\n", optab[opcode], idx);
+						if(DEBUG)sys->print("%s %d\n", optab[opcode], idx);
 						l = ref Winst(opcode, idx, -1, nil) :: l;
+					Wcall_indirect =>
+						tidx := operand();
+						tabidx := operand();
+						if(DEBUG)sys->print("%s %d %d\n", optab[opcode], tidx, tabidx);
+						l = ref Winst(opcode, tidx, tabidx, nil) :: l;
+					Wbr_table =>
+						count := operand();
+						for(bi := 0; bi <= count; bi++)
+							operand();
+						if(DEBUG)sys->print("%s %d\n", optab[opcode], count);
+						l = ref Winst(opcode, count, -1, nil) :: l;
 					Wi32_const or Wi64_const =>
 						n := operand();
-						sys->print("%s %d\n", optab[opcode], n);
+						if(DEBUG)sys->print("%s %d\n", optab[opcode], n);
 						l = ref Winst(opcode, n, -1, nil) :: l;
-					Wf32_const or Wf64_const =>
-						n := operand();
-						sys->print("%s %d\n", optab[opcode], n);
+					Wf32_const =>
+						n := getw();
+						if(DEBUG)sys->print("%s 0x%x\n", optab[opcode], n);
 						l = ref Winst(opcode, n, -1, nil) :: l;
+					Wf64_const =>
+						nlo := getw();
+						nhi := getw();
+						if(DEBUG)sys->print("%s 0x%x 0x%x\n", optab[opcode], nhi, nlo);
+						l = ref Winst(opcode, nlo, nhi, nil) :: l;
 					* =>
-						sys->print("%s\n", optab[opcode]);
+						if(DEBUG)sys->print("%s\n", optab[opcode]);
 						l = ref Winst(opcode, -1, -1, nil) :: l;
 						;
 					}
-					opcode = getb();
+					if(depth > 0)
+						opcode = getb();
 				}
 				vlen--;
 				rl := array[len l] of ref Winst;
