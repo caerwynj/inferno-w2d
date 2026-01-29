@@ -145,7 +145,7 @@ hex(v, n: int): string
 
 #
 # Sanitize a function name to be a valid Limbo identifier.
-# Replace hyphens with underscores.
+# Replace hyphens and dots with underscores, and escape reserved keywords.
 #
 
 sanitizename(name: string): string
@@ -153,12 +153,30 @@ sanitizename(name: string): string
 	s := "";
 	for(i := 0; i < len name; i++) {
 		c := name[i];
-		if(c == '-')
+		if(c == '-' || c == '.')
 			s += "_";
 		else
 			s[len s] = c;
 	}
+	# Escape Limbo reserved keywords by adding underscore suffix
+	if(iskeyword(s))
+		s += "_";
 	return s;
+}
+
+iskeyword(s: string): int
+{
+	# Limbo reserved keywords that might conflict with WASM function names
+	case s {
+	"adt" or "alt" or "array" or "big" or "break" or "byte" or "case" or "chan" or
+	"con" or "continue" or "cyclic" or "do" or "else" or "exception" or "exit" or
+	"fn" or "for" or "hd" or "if" or "implement" or "import" or "include" or "int" or
+	"len" or "list" or "load" or "module" or "nil" or "of" or "or" or "pick" or
+	"raise" or "real" or "ref" or "return" or "self" or "spawn" or "string" or
+	"tagof" or "tl" or "to" or "type" or "while" or "and" or "xor" =>
+		return 1;
+	}
+	return 0;
 }
 
 #
