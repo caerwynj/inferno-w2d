@@ -9,13 +9,14 @@ fprint, print, sprint: import sys;
 gendis:		int = 1;	# generate .dis rather than .s (default)
 fabort:		int;		# -f: cause broken thread on fatal error
 gensbl:		int;		# -g: generate .sbl file
+genmod:		int;		# -m: generate .m module file
 compileflag:	int;		# -c (MUSTCOMPILE) & -C (DONTCOMPILE)
 bout:		ref Bufio->Iobuf;
 ofile:		string;
 
 usage()
 {
-	print("usage: w2d [-cgCS] [-o outfile] file.wasm\n");
+	print("usage: w2d [-cgCmS] [-o outfile] file.wasm\n");
 	exit;
 }
 
@@ -49,6 +50,18 @@ translate(in: string, out: string)
 		sblout(out);
 
 	bout.close();
+
+	if(genmod) {		# generate .m module file
+		# Derive basename from output file (strip extension)
+		basename := out;
+		for(i := len out - 1; i >= 0; i--) {
+			if(out[i] == '.') {
+				basename = out[:i];
+				break;
+			}
+		}
+		genmodfile(m, basename);
+	}
 }
 
 MAXUNENCODED:	con Sys->NAMEMAX - 7;
@@ -128,6 +141,8 @@ init(nil: ref Draw->Context, argv: list of string)
 			compileflag |= _MUSTCOMPILE;
 		'g' =>
 			gensbl = 1;
+		'm' =>
+			genmod = 1;
 		'f' =>
 			fabort = 1;
 		'o' =>

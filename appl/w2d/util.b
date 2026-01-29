@@ -144,6 +144,24 @@ hex(v, n: int): string
 }
 
 #
+# Sanitize a function name to be a valid Limbo identifier.
+# Replace hyphens with underscores.
+#
+
+sanitizename(name: string): string
+{
+	s := "";
+	for(i := 0; i < len name; i++) {
+		c := name[i];
+		if(c == '-')
+			s += "_";
+		else
+			s[len s] = c;
+	}
+	return s;
+}
+
+#
 # Size of frame cell of given type.
 #
 
@@ -200,5 +218,119 @@ reset()
 	# main.b
 	gendis = 1;
 	fabort = 0;
+	genmod = 0;
 	bout = nil;
+}
+
+#
+# Convert WASM type to Limbo type name.
+#
+
+wtype2limbo(wtype: int): string
+{
+	case wtype {
+	I32 =>
+		return "int";
+	I64 =>
+		return "big";
+	F32 or F64 =>
+		return "real";
+	}
+	return "int";
+}
+
+#
+# Generate a function declaration from a FuncType.
+#
+
+wfuncdecl(name: string, ft: ref FuncType): string
+{
+	s := "\t" + name + ": fn(";
+	for(i := 0; i < len ft.args; i++) {
+		if(i > 0)
+			s += ", ";
+		s += sprint("arg%d: %s", i, wtype2limbo(ft.args[i]));
+	}
+	s += ")";
+	if(len ft.rets > 0)
+		s += ": " + wtype2limbo(ft.rets[0]);
+	s += ";\n";
+	return s;
+}
+
+#
+# Generate a .m module file from WASM exports.
+#
+
+genmodfile(m: ref Mod, basename: string)
+{
+	# Derive module name: capitalize first letter
+	modname := basename;
+	if(len modname > 0 && modname[0] >= 'a' && modname[0] <= 'z')
+		modname[0] = modname[0] - 'a' + 'A';
+
+	# Create .m file
+	modfile := basename + ".m";
+	fd := sys->create(modfile, Sys->OWRITE, 8r644);
+	if(fd == nil) {
+		print("w2d: can't create %s: %r\n", modfile);
+		return;
+	}
+
+	# Write module header
+	sys->fprint(fd, "%s: module\n{\n", modname);
+
+	# Write function exports
+	if(m.exportsection != nil) {
+		for(i := 0; i < len m.exportsection.exports; i++) {
+			exp := m.exportsection.exports[i];
+			if(exp.kind != 0)	# only functions (kind=0)
+				continue;
+
+			# Get function type
+			funcidx := exp.idx;
+			# Account for imports - they come before module functions
+			nimports := 0;
+			if(m.importsection != nil) {
+				for(j := 0; j < len m.importsection.imports; j++) {
+					pick imp := m.importsection.imports[j] {
+					Func =>
+						nimports++;
+					}
+				}
+			}
+
+			typeidx: int;
+			if(funcidx < nimports) {
+				# It's an imported function - get type from import
+				impidx := 0;
+				for(j := 0; j < len m.importsection.imports; j++) {
+					pick imp := m.importsection.imports[j] {
+					Func =>
+						if(impidx == funcidx) {
+							typeidx = imp.typeidx;
+							break;
+						}
+						impidx++;
+					}
+				}
+			} else {
+				# It's a module function
+				localidx := funcidx - nimports;
+				if(m.funcsection == nil || localidx >= len m.funcsection.funcs)
+					continue;
+				typeidx = m.funcsection.funcs[localidx];
+			}
+
+			if(m.typesection == nil || typeidx >= len m.typesection.types)
+				continue;
+
+			ft := m.typesection.types[typeidx];
+			fname := sanitizename(exp.name);
+			sys->fprint(fd, "%s", wfuncdecl(fname, ft));
+		}
+	}
+
+	# Write module footer
+	sys->fprint(fd, "};\n");
 }
