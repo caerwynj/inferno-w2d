@@ -4,17 +4,25 @@ WAST=`{ls *.wast}
 JSON=${WAST:%.wast=%.json}
 WASM=`{ls *.wasm}
 DIS=${WASM:%.wasm=%.dis}
+DISPATCH=${JSON:%.json=%.0_dispatch.dis}
+INCLUDES=-I../module
 
 %.json: %.wast
-	wast2json $stem.wast
+	wast2json $stem.wast && mk
 
 %.dis: %.wasm
 	inferno wasm/w2d $stem.wasm
 
-all:V:  $JSON $DIS
+%.0_dispatch.b: %.json
+	inferno specgen $stem.json
+
+%.dis: %.b
+	limbo -I../module $stem.b
+
+all:V:  $JSON $DIS $DISPATCH
 
 clean:V:
-	rm -f *.wasm *.json *.dis
+	rm -f *.wasm *.json *.dis *_dispatch.b
 
 test:V:
 	spectest-interp $JSON

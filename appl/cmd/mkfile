@@ -1,6 +1,8 @@
 INCLUDES=-I../../module
 TARG=disdump.dis\
 	dis.dis\
+	specgen.dis\
+	spectest.dis\
 
 all:V: $DIS
 

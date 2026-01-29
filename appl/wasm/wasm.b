@@ -54,26 +54,22 @@ loadobj(wasmfile: string): (ref Mod, string)
 	while(wasmptr < len wasmobj) {
 		section := operand();
 		slen := operand();
-		sys->print("%s len %d\n", sectab[section], slen);
 
 		case section {
 		STYPE =>
 			m.typesection = ref TypeSection;
 			m.typesection.size = slen;
 			vlen := operand();
-			sys->print("TYPE vlen %d\n", vlen);
 			m.typesection.types = array[vlen] of {* => ref FuncType(nil, nil)};
 			t := 0;
 			while (vlen > 0) {
-				b := getb();
-				sys->print("functype %x\n", b);
+				getb();  # functype marker
 				vallen := operand();
 				ba := array[vallen] of int;
 				i := 0;
 				while(vallen > 0) {
 					vb := getb();
 					ba[i++] = vb;
-					sys->print("arg typ %x\n", vb);
 					vallen--;
 				}
 				m.typesection.types[t].args = ba;
@@ -82,11 +78,10 @@ loadobj(wasmfile: string): (ref Mod, string)
 				i = 0;
 				while(vallen > 0) {
 					vb := getb();
-					ba[i++] = vb;	
-					sys->print("res typ %x\n", vb);
+					ba[i++] = vb;
 					vallen--;
 				}
-				m.typesection.types[t].rets = ba;	
+				m.typesection.types[t].rets = ba;
 				vlen--;
 				t++;
 			}
@@ -100,7 +95,6 @@ loadobj(wasmfile: string): (ref Mod, string)
 				modname := gets();
 				name := gets();
 				desc := getb();
-				sys->print("IMPORT: %s %s %d\n", modname, name, desc);
 				case desc {
 				16r0 =>
 					typeidx := operand();
@@ -124,8 +118,6 @@ loadobj(wasmfile: string): (ref Mod, string)
 					valtyp := getb();
 					mut := getb();
 					m.importsection.imports[i++] = ref Import.Global(modname, name, desc, valtyp, mut);
-				* =>
-					sys->print("import error\n");
 				}
 				vlen--;
 			}	
@@ -138,74 +130,24 @@ loadobj(wasmfile: string): (ref Mod, string)
 			i := 0;
 			while (vlen > 0) {
 				typeidx := getb();
-				sys->print("SFUNC %d\n", typeidx);
 				m.funcsection.funcs[i++] = typeidx;
 				vlen--;
 			}
-			#wasmptr += slen;
 		SCODE =>
-			m.codesection = ref CodeSection;
-			m.codesection.size = slen;
+			# Skip code section parsing - just skip past it
+			wasmptr += slen;
+		SEXPORT =>
+			m.exportsection = ref ExportSection;
+			m.exportsection.size = slen;
 			vlen := operand();
-			m.codesection.codes = array[vlen] of ref Code;
+			m.exportsection.exports = array[vlen] of ref Export;
 			i := 0;
 			while (vlen > 0) {
-				codesize := operand();
-				localsize := operand();
-				sys->print("vlen %d code len %d bytes; codesize %d, localsize %d\n", vlen, slen, codesize, localsize);
-				locs := array[localsize] of ref Local;
-				j := 0;
-				while(localsize > 0){
-					localcnt := operand();
-					localtyp := getb();
-					sys->print("local %d 0x%x\n", localcnt, localtyp);
-					locs[j++] = ref Local(localcnt, localtyp);
-					localsize--;
-				}
-				opcode := getb();
-				l : list of ref Winst;
-				while(opcode != 16r0b){
-					#sys->print("opcode 0x%x %s\n", opcode, optab[opcode]);
-					case opcode {
-					II32_LOAD or II64_LOAD or IF32_LOAD or IF64_LOAD or
-					II32_LOAD8_S or II32_LOAD8_U or II32_LOAD16_S or II32_LOAD16_U or
-					II64_LOAD8_S or II64_LOAD8_U or II64_LOAD16_S or II64_LOAD16_U or
-					II64_LOAD32_S or II64_LOAD32_U or
-					II32_STORE or II64_STORE or IF32_STORE or IF64_STORE or
-					II32_STORE8 or II32_STORE16 or II64_STORE8 or II64_STORE16 or II64_STORE32
-					=>
-						align := operand();
-						offset := operand();
-						sys->print("%s %d %d\n", optab[opcode], align, offset);
-						l = ref Winst(opcode, align, offset) :: l;
-					ILOCAL_GET or ILOCAL_SET or ILOCAL_TEE or IGLOBAL_GET or IGLOBAL_SET =>
-						n := operand();
-						sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1) :: l;
-					IBR or IBR_IF or ICALL or ICALL_INDIRECT =>
-						idx := operand();
-						sys->print("%s %d\n", optab[opcode], idx);
-						l = ref Winst(opcode, idx, -1) :: l;
-					II32_CONST or II64_CONST =>
-						n := operand();
-						sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1) :: l;
-					IF32_CONST or IF64_CONST =>
-						n := operand();
-						sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1) :: l;
-					* =>
-						sys->print("%s\n", optab[opcode]);
-						l = ref Winst(opcode, -1, -1) :: l;
-						;
-					}
-					opcode = getb();
-				}
+				name := gets();
+				kind := getb();
+				idx := operand();
+				m.exportsection.exports[i++] = ref Export(name, kind, idx);
 				vlen--;
-				rl := array[len l] of ref Winst;
-				for(k := len l - 1; l != nil; l = tl l) 
-					rl[k--] = hd l;
-				m.codesection.codes[i++] = ref Code(codesize, locs, rl);
 			}
 		* =>
 			wasmptr += slen;

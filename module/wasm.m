@@ -1,5 +1,7 @@
-Wasm: module 
+Wasm: module
 {
+	PATH:		con "/dis/wasm.dis";
+
 	MAGIC: 		con 16r6d736100;
 	VERSION:	con 1;
 	
@@ -79,6 +81,16 @@ Wasm: module
 		codes: array of ref Code;
 	};
 
+	Export: adt {
+		name: string;
+		kind: int;	# 0=func, 1=table, 2=mem, 3=global
+		idx: int;
+	};
+
+	ExportSection: adt {
+		size: int;
+		exports: array of ref Export;
+	};
 
 	Mod: adt
 	{
@@ -89,6 +101,7 @@ Wasm: module
 		typesection: ref TypeSection;
 		funcsection: ref FuncSection;
 		codesection: ref CodeSection;
+		exportsection: ref ExportSection;
 	};
 
 	init:		fn();

@@ -17,61 +17,15 @@ include "json.m";
 include "math.m";
 	math: Math;
 
+include "dispatcher.m";
+
 Spectest: module {
 	init: fn(nil: ref Draw->Context, argv: list of string);
 };
 
-#
-# Module interface for local_get tests.
-# These signatures match the exported functions from local_get.0.wasm.
-# Note: hyphens in export names are converted to underscores.
-#
-
-# Module interface for local_get tests
-# Only include functions with signatures we know work
-LocalGetMod: module {
-	# () -> i32
-	type_local_i32: fn(): int;
-
-	# () -> i64
-	type_local_i64: fn(): big;
-
-	# () -> f32
-	type_local_f32: fn(): real;
-
-	# () -> f64
-	type_local_f64: fn(): real;
-
-	# (i32) -> i32
-	type_param_i32: fn(a: int): int;
-	as_block_value: fn(a: int): int;
-	as_loop_value: fn(a: int): int;
-	as_br_value: fn(a: int): int;
-	as_br_if_value: fn(a: int): int;
-	as_br_if_value_cond: fn(a: int): int;
-	as_br_table_value: fn(a: int): int;
-	as_return_value: fn(a: int): int;
-	as_if_then: fn(a: int): int;
-	as_if_else: fn(a: int): int;
-
-	# (i64) -> i64
-	type_param_i64: fn(a: big): big;
-
-	# (f32) -> f32
-	type_param_f32: fn(a: real): real;
-
-	# (f64) -> f64
-	type_param_f64: fn(a: real): real;
-
-	# (i64, f32, f64, i32, i32) -> void
-	type_mixed: fn(a: big, b: real, c: real, d: int, e: int);
-
-	# (i64, f32, f64, i32, i32) -> f64
-	read: fn(a: big, b: real, c: real, d: int, e: int): real;
-};
-
-wmod: LocalGetMod;
+dispatcher: Dispatcher;
 passed, failed, skipped: int;
+testdir: string;
 
 init(nil: ref Draw->Context, argv: list of string)
 {
@@ -93,6 +47,16 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 
 	testfile := hd tl argv;
+
+	# Derive test directory from testfile
+	testdir = "";
+	for(i := len testfile - 1; i >= 0; i--) {
+		if(testfile[i] == '/') {
+			testdir = testfile[:i+1];
+			break;
+		}
+	}
+
 	runtest(testfile);
 
 	sys->print("\n=== Test Results ===\n");
@@ -168,10 +132,11 @@ assertinvalid(cmd: ref JValue)
 			name = name[:len name - 5] + ".dis";
 
 		# Load from test directory
-		path := "test/" + name;
+		path := testdir + name;
 
 		# Try to load module - it should fail
-		tmod := load LocalGetMod path;
+		# Use Sys module type as a simple test if file is loadable as a .dis
+		tmod := load Sys path;
 		if(tmod != nil) {
 			sys->print("FAIL assert_invalid %s: module loaded but should have failed\n", name);
 			failed++;
@@ -190,18 +155,29 @@ loadmodule(cmd: ref JValue)
 
 	pick fv := filenamev {
 	String =>
-		# Convert .wasm filename to .dis
+		# Convert .wasm filename to .dis and derive basename
 		name := fv.s;
+		basename := name;
 		if(len name > 5 && name[len name - 5:] == ".wasm")
-			name = name[:len name - 5] + ".dis";
+			basename = name[:len name - 5];
 
-		# Load from test directory
-		path := "test/" + name;
-		sys->print("Loading module: %s\n", path);
+		# Load dispatcher module
+		dispatchpath := testdir + basename + "_dispatch.dis";
+		sys->print("Loading dispatcher: %s\n", dispatchpath);
 
-		wmod = load LocalGetMod path;
-		if(wmod == nil)
-			fatal("can't load module: " + path + ": " + sprint("%r"));
+		dispatcher = load Dispatcher dispatchpath;
+		if(dispatcher == nil)
+			fatal("can't load dispatcher: " + dispatchpath + ": " + sprint("%r"));
+
+		dispatcher->init();
+
+		# Load the WASM module via dispatcher
+		dispath := testdir + basename + ".dis";
+		sys->print("Loading module: %s\n", dispath);
+
+		err := dispatcher->loadmod(dispath);
+		if(err != nil)
+			fatal("can't load module: " + dispath + ": " + err);
 	}
 }
 
@@ -227,19 +203,17 @@ assertreturn(cmd: ref JValue)
 	}
 }
 
-# Argument representation
-Arg: adt {
-	pick {
-	I32 => v: int;
-	I64 => v: big;
-	F32 => v: real;
-	F64 => v: real;
-	}
+# Parsed arg from JSON - simple representation
+ParsedArg: adt {
+	atype: string;	# "i32", "i64", "f32", "f64"
+	ival: int;
+	bval: big;
+	rval: real;
 };
 
-parseargs(argsv: ref JValue): list of ref Arg
+parseargs(argsv: ref JValue): list of ref ParsedArg
 {
-	args: list of ref Arg;
+	args: list of ref ParsedArg;
 	if(argsv == nil || !argsv.isarray())
 		return nil;
 
@@ -254,7 +228,7 @@ parseargs(argsv: ref JValue): list of ref Arg
 	return args;
 }
 
-parsearg(jv: ref JValue): ref Arg
+parsearg(jv: ref JValue): ref ParsedArg
 {
 	if(!jv.isobject())
 		return nil;
@@ -270,24 +244,22 @@ parsearg(jv: ref JValue): ref Arg
 		String =>
 			case tv.s {
 			"i32" =>
-				return ref Arg.I32(int vv.s);
+				return ref ParsedArg("i32", int vv.s, big 0, 0.0);
 			"i64" =>
-				return ref Arg.I64(big vv.s);
+				return ref ParsedArg("i64", 0, big vv.s, 0.0);
 			"f32" =>
-				# Value is bit representation
 				bits := int vv.s;
-				return ref Arg.F32(math->bits32real(bits));
+				return ref ParsedArg("f32", 0, big 0, math->bits32real(bits));
 			"f64" =>
-				# Value is bit representation
 				bits := big vv.s;
-				return ref Arg.F64(math->bits64real(bits));
+				return ref ParsedArg("f64", 0, big 0, math->bits64real(bits));
 			}
 		}
 	}
 	return nil;
 }
 
-parseexpected(expv: ref JValue): list of ref Arg
+parseexpected(expv: ref JValue): list of ref ParsedArg
 {
 	return parseargs(expv);
 }
@@ -310,96 +282,48 @@ sanitizename(name: string): string
 	return s;
 }
 
-callfunc(funcname: string, args: list of ref Arg, expected: list of ref Arg)
+# Convert ParsedArg list to Dispatcher Arg list
+# Uses the dispatcher's arg constructor functions
+toDispatcherArgs(args: list of ref ParsedArg): list of ref Dispatcher->Arg
 {
-	if(wmod == nil) {
-		sys->print("SKIP %s: no module loaded\n", funcname);
+	if(args == nil)
+		return nil;
+
+	dargs: list of ref Dispatcher->Arg;
+	for(a := args; a != nil; a = tl a) {
+		pa := hd a;
+		case pa.atype {
+		"i32" =>
+			dargs = dispatcher->argi32(pa.ival) :: dargs;
+		"i64" =>
+			dargs = dispatcher->argi64(pa.bval) :: dargs;
+		"f32" =>
+			dargs = dispatcher->argf32(pa.rval) :: dargs;
+		"f64" =>
+			dargs = dispatcher->argf64(pa.rval) :: dargs;
+		}
+	}
+	# Reverse to preserve order
+	rdargs: list of ref Dispatcher->Arg;
+	for(; dargs != nil; dargs = tl dargs)
+		rdargs = hd dargs :: rdargs;
+	return rdargs;
+}
+
+callfunc(funcname: string, args: list of ref ParsedArg, expected: list of ref ParsedArg)
+{
+	if(dispatcher == nil) {
+		sys->print("SKIP %s: no dispatcher loaded\n", funcname);
 		skipped++;
 		return;
 	}
 
-	# Call the function based on name (using sanitized names)
-	result: ref Arg;
+	# Convert args to Dispatcher format
+	dargs := toDispatcherArgs(args);
+
+	# Call via dispatcher
 	sname := sanitizename(funcname);
-
-	case sname {
-	"type_local_i32" =>
-		r := wmod->type_local_i32();
-		result = ref Arg.I32(r);
-	"type_local_i64" =>
-		r := wmod->type_local_i64();
-		result = ref Arg.I64(r);
-	"type_local_f32" =>
-		r := wmod->type_local_f32();
-		result = ref Arg.F32(r);
-	"type_local_f64" =>
-		r := wmod->type_local_f64();
-		result = ref Arg.F64(r);
-	"type_param_i32" =>
-		a := geti32(args);
-		r := wmod->type_param_i32(a);
-		result = ref Arg.I32(r);
-	"type_param_i64" =>
-		a := geti64(args);
-		r := wmod->type_param_i64(a);
-		result = ref Arg.I64(r);
-	"type_param_f32" =>
-		a := getf32(args);
-		r := wmod->type_param_f32(a);
-		result = ref Arg.F32(r);
-	"type_param_f64" =>
-		a := getf64(args);
-		r := wmod->type_param_f64(a);
-		result = ref Arg.F64(r);
-	"as_block_value" =>
-		a := geti32(args);
-		r := wmod->as_block_value(a);
-		result = ref Arg.I32(r);
-	"as_loop_value" =>
-		a := geti32(args);
-		r := wmod->as_loop_value(a);
-		result = ref Arg.I32(r);
-	"as_br_value" =>
-		a := geti32(args);
-		r := wmod->as_br_value(a);
-		result = ref Arg.I32(r);
-	"as_br_if_value" =>
-		a := geti32(args);
-		r := wmod->as_br_if_value(a);
-		result = ref Arg.I32(r);
-	"as_br_if_value_cond" =>
-		a := geti32(args);
-		r := wmod->as_br_if_value_cond(a);
-		result = ref Arg.I32(r);
-	"as_br_table_value" =>
-		a := geti32(args);
-		r := wmod->as_br_table_value(a);
-		result = ref Arg.I32(r);
-	"as_return_value" =>
-		a := geti32(args);
-		r := wmod->as_return_value(a);
-		result = ref Arg.I32(r);
-	"as_if_then" =>
-		a := geti32(args);
-		r := wmod->as_if_then(a);
-		result = ref Arg.I32(r);
-	"as_if_else" =>
-		a := geti32(args);
-		r := wmod->as_if_else(a);
-		result = ref Arg.I32(r);
-	"type_mixed" =>
-		(a1, a2, a3, a4, a5) := getmixed(args);
-		wmod->type_mixed(a1, a2, a3, a4, a5);
-		# no return value
-	"read" =>
-		(a1, a2, a3, a4, a5) := getmixed(args);
-		r := wmod->read(a1, a2, a3, a4, a5);
-		result = ref Arg.F64(r);
-	* =>
-		sys->print("SKIP %s: unsupported function signature\n", funcname);
-		skipped++;
-		return;
-	}
+	result := dispatcher->dispatch(sname, dargs);
 
 	# Check result against expected
 	if(expected == nil) {
@@ -419,115 +343,52 @@ callfunc(funcname: string, args: list of ref Arg, expected: list of ref Arg)
 		sys->print("PASS %s\n", funcname);
 		passed++;
 	} else {
-		sys->print("FAIL %s: expected %s, got %s\n", funcname, argstr(exp), argstr(result));
+		sys->print("FAIL %s: expected %s, got %s\n", funcname, expstr(exp), argstr(result));
 		failed++;
 	}
 }
 
-geti32(args: list of ref Arg): int
-{
-	if(args == nil)
-		return 0;
-	pick a := hd args {
-	I32 => return a.v;
-	}
-	return 0;
-}
-
-geti64(args: list of ref Arg): big
-{
-	if(args == nil)
-		return big 0;
-	pick a := hd args {
-	I64 => return a.v;
-	}
-	return big 0;
-}
-
-getf32(args: list of ref Arg): real
-{
-	if(args == nil)
-		return 0.0;
-	pick a := hd args {
-	F32 => return a.v;
-	F64 => return a.v;
-	}
-	return 0.0;
-}
-
-getf64(args: list of ref Arg): real
-{
-	if(args == nil)
-		return 0.0;
-	pick a := hd args {
-	F32 => return a.v;
-	F64 => return a.v;
-	}
-	return 0.0;
-}
-
-getmixed(args: list of ref Arg): (big, real, real, int, int)
-{
-	a1 := big 0;
-	a2 := 0.0;
-	a3 := 0.0;
-	a4 := 0;
-	a5 := 0;
-
-	if(args != nil) {
-		a1 = geti64(args);
-		args = tl args;
-	}
-	if(args != nil) {
-		a2 = getf32(args);
-		args = tl args;
-	}
-	if(args != nil) {
-		a3 = getf64(args);
-		args = tl args;
-	}
-	if(args != nil) {
-		a4 = geti32(args);
-		args = tl args;
-	}
-	if(args != nil) {
-		a5 = geti32(args);
-	}
-	return (a1, a2, a3, a4, a5);
-}
-
-comparearg(a, b: ref Arg): int
+comparearg(a: ref Dispatcher->Arg, b: ref ParsedArg): int
 {
 	pick aa := a {
 	I32 =>
-		pick bb := b {
-		I32 => return aa.v == bb.v;
-		}
+		if(b.atype == "i32")
+			return aa.v == b.ival;
 	I64 =>
-		pick bb := b {
-		I64 => return aa.v == bb.v;
-		}
+		if(b.atype == "i64")
+			return aa.v == b.bval;
 	F32 =>
-		pick bb := b {
-		F32 => return math->realbits32(aa.v) == math->realbits32(bb.v);
-		F64 => return math->realbits32(aa.v) == math->realbits32(bb.v);
-		}
+		if(b.atype == "f32")
+			return math->realbits32(aa.v) == math->realbits32(b.rval);
+		if(b.atype == "f64")
+			return math->realbits32(aa.v) == math->realbits32(b.rval);
 	F64 =>
-		pick bb := b {
-		F32 => return math->realbits64(aa.v) == math->realbits64(bb.v);
-		F64 => return math->realbits64(aa.v) == math->realbits64(bb.v);
-		}
+		if(b.atype == "f32")
+			return math->realbits64(aa.v) == math->realbits64(b.rval);
+		if(b.atype == "f64")
+			return math->realbits64(aa.v) == math->realbits64(b.rval);
 	}
 	return 0;
 }
 
-argstr(a: ref Arg): string
+argstr(a: ref Dispatcher->Arg): string
 {
 	pick aa := a {
 	I32 => return sprint("i32:%d", aa.v);
 	I64 => return sprint("i64:%bd", aa.v);
 	F32 => return sprint("f32:%g", aa.v);
 	F64 => return sprint("f64:%g", aa.v);
+	}
+	return "?";
+}
+
+expstr(a: ref ParsedArg): string
+{
+	case a.atype {
+	"i32" => return sprint("i32:%d", a.ival);
+	"i64" => return sprint("i64:%bd", a.bval);
+	"f32" => return sprint("f32:%g", a.rval);
+	"f64" => return sprint("f64:%g", a.rval);
 	}
 	return "?";
 }

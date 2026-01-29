@@ -5,6 +5,9 @@
 *.sbl
 *.swp
 *.s
+*.wat
 .exrc
 CLAUDE.md
 test/*.json
+test/*.b
+test/*.m

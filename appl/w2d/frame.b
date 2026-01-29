@@ -227,6 +227,38 @@ wlocaltype(ix: int): byte
 }
 
 #
+# Initialize local variables to 0 (WASM requires locals to be zero-initialized).
+# Parameters are already initialized by the caller, so we only initialize
+# the actual local variables (indices >= len functype.args).
+#
+
+winitlocals(functype: ref FuncType, wlocaltypes: array of ref Wlocal)
+{
+	if(wlocaltypes == nil)
+		return;
+
+	localidx := len functype.args;
+	for(i := 0; i < len wlocaltypes; i++) {
+		dtype := w2dtype(wlocaltypes[i].localtyp);
+		for(j := 0; j < wlocaltypes[i].count; j++) {
+			offset := wlocaloffset(localidx);
+			# Generate mov $0, offset(fp) instruction
+			case int dtype {
+			int DIS_W =>
+				inst := newi(IMOVW);
+				addrimm(inst.s, 0);
+				addrsind(inst.d, Afp, offset);
+			int DIS_L =>
+				inst := newi(IMOVL);
+				addrimm(inst.s, 0);
+				addrsind(inst.d, Afp, offset);
+			}
+			localidx++;
+		}
+	}
+}
+
+#
 # Prepare frame for a WASM function.
 #
 
