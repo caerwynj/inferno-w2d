@@ -11,3 +11,4 @@ CLAUDE.md
 test/*.json
 test/*.b
 test/*.m
+*.testout

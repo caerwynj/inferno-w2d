@@ -40,9 +40,14 @@ inferno wasm/w2d -S testfile.wasm
 inferno disdump file.dis
 ```
 
-# Run the test suite
+# Run a single test suite
 ```
 inferno spectest test/local_get.json
+```
+
+# Run the complete test suite
+```
+cd test; mk test
 ```
 
 # Dis ISA

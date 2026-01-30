@@ -6,6 +6,7 @@ WASM=`{ls *.wasm}
 DIS=${WASM:%.wasm=%.dis}
 DISPATCH=${JSON:%.json=%.0_dispatch.dis}
 INCLUDES=-I../module
+TESTOUT=${JSON:%.json=%.testout}
 
 %.json: %.wast
 	wast2json $stem.wast && mk
@@ -19,10 +20,13 @@ INCLUDES=-I../module
 %.dis: %.b
 	limbo -I../module $stem.b
 
+%.testout: %.json
+	(cd ..; inferno spectest test/$stem.json) > $stem.testout
+
 all:V:  $JSON $DIS $DISPATCH
 
 clean:V:
 	rm -f *.wasm *.json *.dis *_dispatch.b
 
-test:V:
-	spectest-interp $JSON
+test:V: $TESTOUT
+	grep FAIL *.testout
