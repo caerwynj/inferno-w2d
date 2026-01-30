@@ -121,7 +121,7 @@ wsrc(n: int): ref Addr
 }
 
 #
-# Translate i32 binary arithmetic operation.
+# Translate i32 binary arithmetic operation (commutative: add, mul, and, or, xor).
 #
 
 xi32binop(disop: int)
@@ -139,7 +139,900 @@ xi32binop(disop: int)
 }
 
 #
-# Translate i64 binary arithmetic operation.
+# Translate i32 binary arithmetic operation (non-commutative: sub, div, mod, shl, shr).
+# Dis operations: dst = src2 OP src1
+# WASM operations: result = operand1 OP operand2, where operand2 is top of stack
+# So we need: src1 = wsrc(0) (top), src2 = wsrc(1) (second from top)
+#
+
+xi32binop_nc(disop: int)
+{
+	i := newi(disop);
+	# Use recorded source PCs from simulation instead of wsrc
+	# Note: swapped compared to commutative operations
+	if(Wi.src1pc >= 0 && Wi.src2pc >= 0) {
+		*i.s = *wcodes[Wi.src2pc].dst;	# top of stack (operand2)
+		*i.m = *wcodes[Wi.src1pc].dst;	# second from top (operand1)
+	} else {
+		*i.s = *wsrc(0);	# top of stack (operand2)
+		*i.m = *wsrc(1);	# second from top (operand1)
+	}
+	*i.d = *Wi.dst;
+}
+
+#
+# Translate unsigned i32 division/modulo.
+# We need to mask operands to 32 bits first to treat them as unsigned.
+# This converts negative 64-bit values to positive 32-bit unsigned values.
+#
+
+xi32binop_unsigned(disop: int)
+{
+	# Get temporary registers for masked operands
+	tmp1 := getreg(DIS_W);
+	tmp2 := getreg(DIS_W);
+
+	# Get mask constant in module data (64-bit big for ANDW)
+	maskoff := mpbig(big 16rFFFFFFFF);
+
+	# Mask first operand (operand1, deeper in stack) to 32 bits
+	iand1 := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand1.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand1.s = *wsrc(1);
+	addrsind(iand1.m, Amp, maskoff);
+	addrsind(iand1.d, Afp, tmp1);
+
+	# Mask second operand (operand2, top of stack) to 32 bits
+	iand2 := newi(IANDW);
+	if(Wi.src2pc >= 0)
+		*iand2.s = *wcodes[Wi.src2pc].dst;
+	else
+		*iand2.s = *wsrc(0);
+	addrsind(iand2.m, Amp, maskoff);
+	addrsind(iand2.d, Afp, tmp2);
+
+	# Perform the operation (division or modulo)
+	# Note: swapped operands for Dis semantics (dst = src2 OP src1)
+	i := newi(disop);
+	addrsind(i.s, Afp, tmp2);  # divisor (operand2)
+	addrsind(i.m, Afp, tmp1);  # dividend (operand1)
+	*i.d = *Wi.dst;
+
+	# Release temp registers - use the instruction addresses
+	relreg(iand1.d);
+	relreg(iand2.d);
+}
+
+#
+# Translate i32 shift operation.
+# WASM requires shift count to be masked to 5 bits (count & 31).
+#
+
+xi32shift(disop: int)
+{
+	# Get mask constant (31 = 0x1F) in module data
+	maskoff := mpbig(big 31);
+
+	# Use destination register for masked shift count
+	# First, mask shift count and store in destination
+	iand := newi(IANDW);
+	if(Wi.src2pc >= 0)
+		*iand.s = *wcodes[Wi.src2pc].dst;
+	else
+		*iand.s = *wsrc(0);
+	addrsind(iand.m, Amp, maskoff);
+	*iand.d = *Wi.dst;  # Store masked count in dest temporarily
+
+	# Perform the shift operation
+	# Dis: dst = src2 OP src1 (value shifted by count)
+	# So src1 = masked_count (now in dst), src2 = value
+	i := newi(disop);
+	*i.s = *Wi.dst;  # shift count (masked, from dest)
+	if(Wi.src1pc >= 0)
+		*i.m = *wcodes[Wi.src1pc].dst;  # value to shift
+	else
+		*i.m = *wsrc(1);
+	*i.d = *Wi.dst;
+}
+
+#
+# Translate unsigned i32 right shift.
+# Need to mask both the shift count (to 5 bits) and the value (to 32 bits for unsigned).
+#
+
+xi32shift_unsigned(disop: int)
+{
+	# Get one temporary register for the masked value
+	tmpval := getreg(DIS_W);
+
+	# Mask constants in module data
+	mask32off := mpbig(big 16rFFFFFFFF);
+	mask5off := mpbig(big 31);
+
+	# Mask value (operand1, deeper in stack) to 32 bits
+	iand1 := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand1.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand1.s = *wsrc(1);
+	addrsind(iand1.m, Amp, mask32off);
+	addrsind(iand1.d, Afp, tmpval);
+
+	# Mask shift count (operand2, top of stack) to 5 bits
+	# Store in destination register temporarily
+	iand2 := newi(IANDW);
+	if(Wi.src2pc >= 0)
+		*iand2.s = *wcodes[Wi.src2pc].dst;
+	else
+		*iand2.s = *wsrc(0);
+	addrsind(iand2.m, Amp, mask5off);
+	*iand2.d = *Wi.dst;
+
+	# Perform the shift operation
+	i := newi(disop);
+	*i.s = *Wi.dst;  # shift count (from dest)
+	addrsind(i.m, Afp, tmpval);  # masked value
+	*i.d = *Wi.dst;
+
+	# Release temp register
+	relreg(iand1.d);
+}
+
+#
+# Translate i32 rotate left.
+# rotl(x, n) = (x << n) | (x >> (32 - n)) where n is masked to 5 bits
+# and x is treated as unsigned 32-bit.
+#
+
+xi32rotl()
+{
+	# Allocate temporary registers
+	tmp_cnt := getreg(DIS_W);
+	tmp_val := getreg(DIS_W);
+	tmp_left := getreg(DIS_W);
+	tmp_rcnt := getreg(DIS_W);
+
+	# Mask constants in module data
+	mask32off := mpbig(big 16rFFFFFFFF);
+	mask5off := mpbig(big 31);
+
+	# cnt = n & 31 (mask shift count to 5 bits)
+	iand1 := newi(IANDW);
+	if(Wi.src2pc >= 0)
+		*iand1.s = *wcodes[Wi.src2pc].dst;
+	else
+		*iand1.s = *wsrc(0);
+	addrsind(iand1.m, Amp, mask5off);
+	addrsind(iand1.d, Afp, tmp_cnt);
+
+	# val = x & 0xFFFFFFFF (mask value to 32 bits for unsigned)
+	iand2 := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand2.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand2.s = *wsrc(1);
+	addrsind(iand2.m, Amp, mask32off);
+	addrsind(iand2.d, Afp, tmp_val);
+
+	# left = val << cnt
+	ishl := newi(ISHLW);
+	addrsind(ishl.s, Afp, tmp_cnt);
+	addrsind(ishl.m, Afp, tmp_val);
+	addrsind(ishl.d, Afp, tmp_left);
+
+	# rcnt = 32 - cnt
+	imov := newi(IMOVW);
+	addrimm(imov.s, 32);
+	addrsind(imov.d, Afp, tmp_rcnt);
+
+	isub := newi(ISUBW);
+	addrsind(isub.s, Afp, tmp_cnt);
+	addrsind(isub.m, Afp, tmp_rcnt);
+	addrsind(isub.d, Afp, tmp_rcnt);
+
+	# right = val >> rcnt (logical shift)
+	ilsr := newi(ILSRW);
+	addrsind(ilsr.s, Afp, tmp_rcnt);
+	addrsind(ilsr.m, Afp, tmp_val);
+	*ilsr.d = *Wi.dst;
+
+	# result = left | right
+	ior := newi(IORW);
+	addrsind(ior.s, Afp, tmp_left);
+	*ior.m = *Wi.dst;
+	*ior.d = *Wi.dst;
+
+	# Release temp registers
+	relreg(iand1.d);
+	relreg(iand2.d);
+	relreg(ishl.d);
+	relreg(isub.d);
+}
+
+#
+# Translate i32 rotate right.
+# rotr(x, n) = (x >> n) | (x << (32 - n)) where n is masked to 5 bits
+# and x is treated as unsigned 32-bit.
+#
+
+xi32rotr()
+{
+	# Allocate temporary registers
+	tmp_cnt := getreg(DIS_W);
+	tmp_val := getreg(DIS_W);
+	tmp_right := getreg(DIS_W);
+	tmp_lcnt := getreg(DIS_W);
+
+	# Mask constants in module data
+	mask32off := mpbig(big 16rFFFFFFFF);
+	mask5off := mpbig(big 31);
+
+	# cnt = n & 31 (mask shift count to 5 bits)
+	iand1 := newi(IANDW);
+	if(Wi.src2pc >= 0)
+		*iand1.s = *wcodes[Wi.src2pc].dst;
+	else
+		*iand1.s = *wsrc(0);
+	addrsind(iand1.m, Amp, mask5off);
+	addrsind(iand1.d, Afp, tmp_cnt);
+
+	# val = x & 0xFFFFFFFF (mask value to 32 bits for unsigned)
+	iand2 := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand2.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand2.s = *wsrc(1);
+	addrsind(iand2.m, Amp, mask32off);
+	addrsind(iand2.d, Afp, tmp_val);
+
+	# right = val >> cnt (logical shift)
+	ilsr := newi(ILSRW);
+	addrsind(ilsr.s, Afp, tmp_cnt);
+	addrsind(ilsr.m, Afp, tmp_val);
+	addrsind(ilsr.d, Afp, tmp_right);
+
+	# lcnt = 32 - cnt
+	imov := newi(IMOVW);
+	addrimm(imov.s, 32);
+	addrsind(imov.d, Afp, tmp_lcnt);
+
+	isub := newi(ISUBW);
+	addrsind(isub.s, Afp, tmp_cnt);
+	addrsind(isub.m, Afp, tmp_lcnt);
+	addrsind(isub.d, Afp, tmp_lcnt);
+
+	# left = val << lcnt
+	ishl := newi(ISHLW);
+	addrsind(ishl.s, Afp, tmp_lcnt);
+	addrsind(ishl.m, Afp, tmp_val);
+	*ishl.d = *Wi.dst;
+
+	# result = right | left
+	ior := newi(IORW);
+	addrsind(ior.s, Afp, tmp_right);
+	*ior.m = *Wi.dst;
+	*ior.d = *Wi.dst;
+
+	# Release temp registers
+	relreg(iand1.d);
+	relreg(iand2.d);
+	relreg(ilsr.d);
+	relreg(isub.d);
+}
+
+#
+# Simplified i32 rotate left.
+# rotl(x, n) = (x << n) | (x >> (32 - n)) where n is masked to 5 bits
+# and x is treated as unsigned 32-bit.
+#
+# IMPORTANT: getreg() may return the same registers that held src1/src2.
+# We use Wi.dst (known safe) for one temp, and read src2 FIRST since
+# the fresh temp (from getreg) might overlap with src2's location.
+# Within one instruction, read happens before write, so reading src2 into
+# a fresh temp that might be src1's location is safe, THEN we can read src1.
+#
+
+xi32rotl_simple()
+{
+	# Mask constants (use mpbig for 64-bit SUBW)
+	mask32off := mpbig(big 16rFFFFFFFF);
+	mask5off := mpbig(big 31);
+	const32off := mpbig(big 32);
+
+	# Allocate temps - these might overlap with src1/src2 locations
+	tmp_val := getreg(DIS_W);  # will hold masked value
+	tmp_left := getreg(DIS_W); # left shift result
+	tmp_rcnt := getreg(DIS_W); # right count
+
+	# CRITICAL: Read src2 (count) FIRST into Wi.dst (known safe location)
+	# because tmp_val might be allocated at src2's location
+	iand_cnt := newi(IANDW);
+	if(Wi.src2pc >= 0)
+		*iand_cnt.s = *wcodes[Wi.src2pc].dst;
+	else
+		*iand_cnt.s = *wsrc(0);
+	addrsind(iand_cnt.m, Amp, mask5off);
+	*iand_cnt.d = *Wi.dst;  # Store count in dst (known safe)
+
+	# Now read src1 (value) - safe even if tmp_val was src2's location
+	iand_val := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand_val.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand_val.s = *wsrc(1);
+	addrsind(iand_val.m, Amp, mask32off);
+	addrsind(iand_val.d, Afp, tmp_val);
+
+	# left = val << cnt (cnt is in Wi.dst)
+	ishl := newi(ISHLW);
+	*ishl.s = *Wi.dst;  # count from dst
+	addrsind(ishl.m, Afp, tmp_val);
+	addrsind(ishl.d, Afp, tmp_left);
+
+	# rcnt = 32 - cnt
+	isub := newi(ISUBW);
+	*isub.s = *Wi.dst;  # count from dst
+	addrsind(isub.m, Amp, const32off);
+	addrsind(isub.d, Afp, tmp_rcnt);
+
+	# right = val >> rcnt (logical)
+	ilsr := newi(ILSRW);
+	addrsind(ilsr.s, Afp, tmp_rcnt);
+	addrsind(ilsr.m, Afp, tmp_val);
+	*ilsr.d = *Wi.dst;
+
+	# result = left | right
+	ior := newi(IORW);
+	addrsind(ior.s, Afp, tmp_left);
+	*ior.m = *Wi.dst;
+	*ior.d = *Wi.dst;
+
+	# Release temp registers
+	relreg(iand_val.d);
+	relreg(ishl.d);
+	relreg(isub.d);
+}
+
+#
+# Simplified i32 rotate right.
+# rotr(x, n) = (x >> n) | (x << (32 - n)) where n is masked to 5 bits
+# and x is treated as unsigned 32-bit.
+#
+# IMPORTANT: Same pattern as rotl - read src2 (count) first into Wi.dst,
+# then read src1 (value) into a getreg temp which might overlap with src2.
+#
+
+xi32rotr_simple()
+{
+	# Mask constants (use mpbig for 64-bit SUBW)
+	mask32off := mpbig(big 16rFFFFFFFF);
+	mask5off := mpbig(big 31);
+	const32off := mpbig(big 32);
+
+	# Allocate temp registers - might overlap with src1/src2
+	tmp_val := getreg(DIS_W);   # masked value
+	tmp_right := getreg(DIS_W); # right shift result
+	tmp_lcnt := getreg(DIS_W);  # left count
+
+	# CRITICAL: Read src2 (count) FIRST into Wi.dst (known safe)
+	iand_cnt := newi(IANDW);
+	if(Wi.src2pc >= 0)
+		*iand_cnt.s = *wcodes[Wi.src2pc].dst;
+	else
+		*iand_cnt.s = *wsrc(0);
+	addrsind(iand_cnt.m, Amp, mask5off);
+	*iand_cnt.d = *Wi.dst;
+
+	# Now read src1 (value) - safe even if tmp_val was src2's location
+	iand_val := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand_val.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand_val.s = *wsrc(1);
+	addrsind(iand_val.m, Amp, mask32off);
+	addrsind(iand_val.d, Afp, tmp_val);
+
+	# right = val >> cnt (logical), cnt is in Wi.dst
+	ilsr := newi(ILSRW);
+	*ilsr.s = *Wi.dst;
+	addrsind(ilsr.m, Afp, tmp_val);
+	addrsind(ilsr.d, Afp, tmp_right);
+
+	# lcnt = 32 - cnt
+	isub := newi(ISUBW);
+	*isub.s = *Wi.dst;
+	addrsind(isub.m, Amp, const32off);
+	addrsind(isub.d, Afp, tmp_lcnt);
+
+	# left = val << lcnt
+	ishl := newi(ISHLW);
+	addrsind(ishl.s, Afp, tmp_lcnt);
+	addrsind(ishl.m, Afp, tmp_val);
+	*ishl.d = *Wi.dst;
+
+	# result = right | left
+	ior := newi(IORW);
+	addrsind(ior.s, Afp, tmp_right);
+	*ior.m = *Wi.dst;
+	*ior.d = *Wi.dst;
+
+	# Release temp registers
+	relreg(iand_val.d);
+	relreg(ilsr.d);
+	relreg(isub.d);
+}
+
+#
+# Translate i32 count leading zeros.
+# Uses binary search: check top half, if 0 then add bits and shift.
+# clz(0) = 32, clz(0x80000000) = 0, clz(1) = 31
+#
+
+xi32clz()
+{
+	# Save starting PC for branch target calculation
+	start_pc := pcdis;
+	end_pc := start_pc + 25;
+
+	# Allocate registers
+	tmp_x := getreg(DIS_W);  # working value
+	tmp_n := getreg(DIS_W);  # count
+	tmp_t := getreg(DIS_W);  # temporary for AND result
+
+	# Mask constants in module data
+	mask32off := mpbig(big 16rFFFFFFFF);
+	mask16off := mpbig(big 16rFFFF0000);
+	mask8off := mpbig(big 16rFF000000);
+	mask4off := mpbig(big 16rF0000000);
+	mask2off := mpbig(big 16rC0000000);
+	mask1off := mpbig(big 16r80000000);
+
+	# PC 0: x = input & 0xFFFFFFFF
+	iand0 := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand0.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand0.s = *wsrc(0);
+	addrsind(iand0.m, Amp, mask32off);
+	addrsind(iand0.d, Afp, tmp_x);
+
+	# PC 1: if x != 0, skip to PC 4
+	ibr_nz := newi(IBNEW);
+	addrsind(ibr_nz.s, Afp, tmp_x);
+	addrimm(ibr_nz.m, 0);
+	addrimm(ibr_nz.d, start_pc + 4);
+
+	# PC 2: dst = 32
+	imov_32 := newi(IMOVW);
+	addrimm(imov_32.s, 32);
+	*imov_32.d = *Wi.dst;
+
+	# PC 3: jump to end
+	ijmp := newi(IJMP);
+	addrimm(ijmp.d, end_pc);
+
+	# PC 4: n = 0
+	imov_n := newi(IMOVW);
+	addrimm(imov_n.s, 0);
+	addrsind(imov_n.d, Afp, tmp_n);
+
+	# Step 1: if ((x & 0xFFFF0000) == 0) { n += 16; x <<= 16; }
+	# PC 5
+	iand1 := newi(IANDW);
+	addrsind(iand1.s, Afp, tmp_x);
+	addrsind(iand1.m, Amp, mask16off);
+	addrsind(iand1.d, Afp, tmp_t);
+	# PC 6
+	ibr1 := newi(IBNEW);
+	addrsind(ibr1.s, Afp, tmp_t);
+	addrimm(ibr1.m, 0);
+	addrimm(ibr1.d, start_pc + 9);
+	# PC 7
+	iadd1 := newi(IADDW);
+	addrimm(iadd1.s, 16);
+	addrsind(iadd1.m, Afp, tmp_n);
+	addrsind(iadd1.d, Afp, tmp_n);
+	# PC 8
+	ishl1 := newi(ISHLW);
+	addrimm(ishl1.s, 16);
+	addrsind(ishl1.m, Afp, tmp_x);
+	addrsind(ishl1.d, Afp, tmp_x);
+
+	# Step 2: if ((x & 0xFF000000) == 0) { n += 8; x <<= 8; }
+	# PC 9
+	iand2 := newi(IANDW);
+	addrsind(iand2.s, Afp, tmp_x);
+	addrsind(iand2.m, Amp, mask8off);
+	addrsind(iand2.d, Afp, tmp_t);
+	# PC 10
+	ibr2 := newi(IBNEW);
+	addrsind(ibr2.s, Afp, tmp_t);
+	addrimm(ibr2.m, 0);
+	addrimm(ibr2.d, start_pc + 13);
+	# PC 11
+	iadd2 := newi(IADDW);
+	addrimm(iadd2.s, 8);
+	addrsind(iadd2.m, Afp, tmp_n);
+	addrsind(iadd2.d, Afp, tmp_n);
+	# PC 12
+	ishl2 := newi(ISHLW);
+	addrimm(ishl2.s, 8);
+	addrsind(ishl2.m, Afp, tmp_x);
+	addrsind(ishl2.d, Afp, tmp_x);
+
+	# Step 3: if ((x & 0xF0000000) == 0) { n += 4; x <<= 4; }
+	# PC 13
+	iand3 := newi(IANDW);
+	addrsind(iand3.s, Afp, tmp_x);
+	addrsind(iand3.m, Amp, mask4off);
+	addrsind(iand3.d, Afp, tmp_t);
+	# PC 14
+	ibr3 := newi(IBNEW);
+	addrsind(ibr3.s, Afp, tmp_t);
+	addrimm(ibr3.m, 0);
+	addrimm(ibr3.d, start_pc + 17);
+	# PC 15
+	iadd3 := newi(IADDW);
+	addrimm(iadd3.s, 4);
+	addrsind(iadd3.m, Afp, tmp_n);
+	addrsind(iadd3.d, Afp, tmp_n);
+	# PC 16
+	ishl3 := newi(ISHLW);
+	addrimm(ishl3.s, 4);
+	addrsind(ishl3.m, Afp, tmp_x);
+	addrsind(ishl3.d, Afp, tmp_x);
+
+	# Step 4: if ((x & 0xC0000000) == 0) { n += 2; x <<= 2; }
+	# PC 17
+	iand4 := newi(IANDW);
+	addrsind(iand4.s, Afp, tmp_x);
+	addrsind(iand4.m, Amp, mask2off);
+	addrsind(iand4.d, Afp, tmp_t);
+	# PC 18
+	ibr4 := newi(IBNEW);
+	addrsind(ibr4.s, Afp, tmp_t);
+	addrimm(ibr4.m, 0);
+	addrimm(ibr4.d, start_pc + 21);
+	# PC 19
+	iadd4 := newi(IADDW);
+	addrimm(iadd4.s, 2);
+	addrsind(iadd4.m, Afp, tmp_n);
+	addrsind(iadd4.d, Afp, tmp_n);
+	# PC 20
+	ishl4 := newi(ISHLW);
+	addrimm(ishl4.s, 2);
+	addrsind(ishl4.m, Afp, tmp_x);
+	addrsind(ishl4.d, Afp, tmp_x);
+
+	# Step 5: if ((x & 0x80000000) == 0) { n += 1; }
+	# PC 21
+	iand5 := newi(IANDW);
+	addrsind(iand5.s, Afp, tmp_x);
+	addrsind(iand5.m, Amp, mask1off);
+	addrsind(iand5.d, Afp, tmp_t);
+	# PC 22
+	ibr5 := newi(IBNEW);
+	addrsind(ibr5.s, Afp, tmp_t);
+	addrimm(ibr5.m, 0);
+	addrimm(ibr5.d, start_pc + 24);
+	# PC 23
+	iadd5 := newi(IADDW);
+	addrimm(iadd5.s, 1);
+	addrsind(iadd5.m, Afp, tmp_n);
+	addrsind(iadd5.d, Afp, tmp_n);
+
+	# PC 24: dst = n
+	imov_final := newi(IMOVW);
+	addrsind(imov_final.s, Afp, tmp_n);
+	*imov_final.d = *Wi.dst;
+
+	# Release temp registers
+	relreg(iand0.d);
+	relreg(imov_n.d);
+	relreg(iand1.d);
+}
+
+#
+# Translate i32 count trailing zeros.
+# Uses binary search: check bottom half, if 0 then add bits and shift right.
+# ctz(0) = 32, ctz(1) = 0, ctz(0x80000000) = 31
+#
+
+xi32ctz()
+{
+	# Save starting PC for branch target calculation
+	start_pc := pcdis;
+	end_pc := start_pc + 25;
+
+	# Allocate registers
+	tmp_x := getreg(DIS_W);  # working value
+	tmp_n := getreg(DIS_W);  # count
+	tmp_t := getreg(DIS_W);  # temporary for AND result
+
+	# Mask constants in module data
+	mask32off := mpbig(big 16rFFFFFFFF);
+	mask16off := mpbig(big 16r0000FFFF);
+	mask8off := mpbig(big 16r000000FF);
+	mask4off := mpbig(big 16r0000000F);
+	mask2off := mpbig(big 16r00000003);
+	mask1off := mpbig(big 16r00000001);
+
+	# PC 0: x = input & 0xFFFFFFFF
+	iand0 := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand0.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand0.s = *wsrc(0);
+	addrsind(iand0.m, Amp, mask32off);
+	addrsind(iand0.d, Afp, tmp_x);
+
+	# PC 1: if x != 0, skip to PC 4
+	ibr_nz := newi(IBNEW);
+	addrsind(ibr_nz.s, Afp, tmp_x);
+	addrimm(ibr_nz.m, 0);
+	addrimm(ibr_nz.d, start_pc + 4);
+
+	# PC 2: dst = 32
+	imov_32 := newi(IMOVW);
+	addrimm(imov_32.s, 32);
+	*imov_32.d = *Wi.dst;
+
+	# PC 3: jump to end
+	ijmp := newi(IJMP);
+	addrimm(ijmp.d, end_pc);
+
+	# PC 4: n = 0
+	imov_n := newi(IMOVW);
+	addrimm(imov_n.s, 0);
+	addrsind(imov_n.d, Afp, tmp_n);
+
+	# Step 1: if ((x & 0x0000FFFF) == 0) { n += 16; x >>= 16; }
+	# PC 5
+	iand1 := newi(IANDW);
+	addrsind(iand1.s, Afp, tmp_x);
+	addrsind(iand1.m, Amp, mask16off);
+	addrsind(iand1.d, Afp, tmp_t);
+	# PC 6
+	ibr1 := newi(IBNEW);
+	addrsind(ibr1.s, Afp, tmp_t);
+	addrimm(ibr1.m, 0);
+	addrimm(ibr1.d, start_pc + 9);
+	# PC 7
+	iadd1 := newi(IADDW);
+	addrimm(iadd1.s, 16);
+	addrsind(iadd1.m, Afp, tmp_n);
+	addrsind(iadd1.d, Afp, tmp_n);
+	# PC 8
+	ilsr1 := newi(ILSRW);
+	addrimm(ilsr1.s, 16);
+	addrsind(ilsr1.m, Afp, tmp_x);
+	addrsind(ilsr1.d, Afp, tmp_x);
+
+	# Step 2: if ((x & 0x000000FF) == 0) { n += 8; x >>= 8; }
+	# PC 9
+	iand2 := newi(IANDW);
+	addrsind(iand2.s, Afp, tmp_x);
+	addrsind(iand2.m, Amp, mask8off);
+	addrsind(iand2.d, Afp, tmp_t);
+	# PC 10
+	ibr2 := newi(IBNEW);
+	addrsind(ibr2.s, Afp, tmp_t);
+	addrimm(ibr2.m, 0);
+	addrimm(ibr2.d, start_pc + 13);
+	# PC 11
+	iadd2 := newi(IADDW);
+	addrimm(iadd2.s, 8);
+	addrsind(iadd2.m, Afp, tmp_n);
+	addrsind(iadd2.d, Afp, tmp_n);
+	# PC 12
+	ilsr2 := newi(ILSRW);
+	addrimm(ilsr2.s, 8);
+	addrsind(ilsr2.m, Afp, tmp_x);
+	addrsind(ilsr2.d, Afp, tmp_x);
+
+	# Step 3: if ((x & 0x0000000F) == 0) { n += 4; x >>= 4; }
+	# PC 13
+	iand3 := newi(IANDW);
+	addrsind(iand3.s, Afp, tmp_x);
+	addrsind(iand3.m, Amp, mask4off);
+	addrsind(iand3.d, Afp, tmp_t);
+	# PC 14
+	ibr3 := newi(IBNEW);
+	addrsind(ibr3.s, Afp, tmp_t);
+	addrimm(ibr3.m, 0);
+	addrimm(ibr3.d, start_pc + 17);
+	# PC 15
+	iadd3 := newi(IADDW);
+	addrimm(iadd3.s, 4);
+	addrsind(iadd3.m, Afp, tmp_n);
+	addrsind(iadd3.d, Afp, tmp_n);
+	# PC 16
+	ilsr3 := newi(ILSRW);
+	addrimm(ilsr3.s, 4);
+	addrsind(ilsr3.m, Afp, tmp_x);
+	addrsind(ilsr3.d, Afp, tmp_x);
+
+	# Step 4: if ((x & 0x00000003) == 0) { n += 2; x >>= 2; }
+	# PC 17
+	iand4 := newi(IANDW);
+	addrsind(iand4.s, Afp, tmp_x);
+	addrsind(iand4.m, Amp, mask2off);
+	addrsind(iand4.d, Afp, tmp_t);
+	# PC 18
+	ibr4 := newi(IBNEW);
+	addrsind(ibr4.s, Afp, tmp_t);
+	addrimm(ibr4.m, 0);
+	addrimm(ibr4.d, start_pc + 21);
+	# PC 19
+	iadd4 := newi(IADDW);
+	addrimm(iadd4.s, 2);
+	addrsind(iadd4.m, Afp, tmp_n);
+	addrsind(iadd4.d, Afp, tmp_n);
+	# PC 20
+	ilsr4 := newi(ILSRW);
+	addrimm(ilsr4.s, 2);
+	addrsind(ilsr4.m, Afp, tmp_x);
+	addrsind(ilsr4.d, Afp, tmp_x);
+
+	# Step 5: if ((x & 0x00000001) == 0) { n += 1; }
+	# PC 21
+	iand5 := newi(IANDW);
+	addrsind(iand5.s, Afp, tmp_x);
+	addrsind(iand5.m, Amp, mask1off);
+	addrsind(iand5.d, Afp, tmp_t);
+	# PC 22
+	ibr5 := newi(IBNEW);
+	addrsind(ibr5.s, Afp, tmp_t);
+	addrimm(ibr5.m, 0);
+	addrimm(ibr5.d, start_pc + 24);
+	# PC 23
+	iadd5 := newi(IADDW);
+	addrimm(iadd5.s, 1);
+	addrsind(iadd5.m, Afp, tmp_n);
+	addrsind(iadd5.d, Afp, tmp_n);
+
+	# PC 24: dst = n
+	imov_final := newi(IMOVW);
+	addrsind(imov_final.s, Afp, tmp_n);
+	*imov_final.d = *Wi.dst;
+
+	# Release temp registers
+	relreg(iand0.d);
+	relreg(imov_n.d);
+	relreg(iand1.d);
+}
+
+#
+# Translate i32 population count (count of 1 bits).
+# Uses parallel bit counting algorithm.
+#
+
+xi32popcnt()
+{
+	# Allocate registers
+	tmp_x := getreg(DIS_W);  # working value
+	tmp_t := getreg(DIS_W);  # temporary
+
+	# Mask constants in module data
+	mask32off := mpbig(big 16rFFFFFFFF);
+	m1off := mpbig(big 16r55555555);  # 0101...
+	m2off := mpbig(big 16r33333333);  # 0011...
+	m4off := mpbig(big 16r0F0F0F0F);  # 00001111...
+	m8off := mpbig(big 16r00FF00FF);  # 0000000011111111...
+	m16off := mpbig(big 16r0000FFFF); # lower 16 bits
+
+	# x = input & 0xFFFFFFFF
+	iand0 := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand0.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand0.s = *wsrc(0);
+	addrsind(iand0.m, Amp, mask32off);
+	addrsind(iand0.d, Afp, tmp_x);
+
+	# Step 1: x = (x & m1) + ((x >> 1) & m1)
+	# t = x >> 1
+	ilsr1 := newi(ILSRW);
+	addrimm(ilsr1.s, 1);
+	addrsind(ilsr1.m, Afp, tmp_x);
+	addrsind(ilsr1.d, Afp, tmp_t);
+	# t = t & m1
+	iand1t := newi(IANDW);
+	addrsind(iand1t.s, Afp, tmp_t);
+	addrsind(iand1t.m, Amp, m1off);
+	addrsind(iand1t.d, Afp, tmp_t);
+	# x = x & m1
+	iand1x := newi(IANDW);
+	addrsind(iand1x.s, Afp, tmp_x);
+	addrsind(iand1x.m, Amp, m1off);
+	addrsind(iand1x.d, Afp, tmp_x);
+	# x = x + t
+	iadd1 := newi(IADDW);
+	addrsind(iadd1.s, Afp, tmp_t);
+	addrsind(iadd1.m, Afp, tmp_x);
+	addrsind(iadd1.d, Afp, tmp_x);
+
+	# Step 2: x = (x & m2) + ((x >> 2) & m2)
+	ilsr2 := newi(ILSRW);
+	addrimm(ilsr2.s, 2);
+	addrsind(ilsr2.m, Afp, tmp_x);
+	addrsind(ilsr2.d, Afp, tmp_t);
+	iand2t := newi(IANDW);
+	addrsind(iand2t.s, Afp, tmp_t);
+	addrsind(iand2t.m, Amp, m2off);
+	addrsind(iand2t.d, Afp, tmp_t);
+	iand2x := newi(IANDW);
+	addrsind(iand2x.s, Afp, tmp_x);
+	addrsind(iand2x.m, Amp, m2off);
+	addrsind(iand2x.d, Afp, tmp_x);
+	iadd2 := newi(IADDW);
+	addrsind(iadd2.s, Afp, tmp_t);
+	addrsind(iadd2.m, Afp, tmp_x);
+	addrsind(iadd2.d, Afp, tmp_x);
+
+	# Step 3: x = (x & m4) + ((x >> 4) & m4)
+	ilsr3 := newi(ILSRW);
+	addrimm(ilsr3.s, 4);
+	addrsind(ilsr3.m, Afp, tmp_x);
+	addrsind(ilsr3.d, Afp, tmp_t);
+	iand3t := newi(IANDW);
+	addrsind(iand3t.s, Afp, tmp_t);
+	addrsind(iand3t.m, Amp, m4off);
+	addrsind(iand3t.d, Afp, tmp_t);
+	iand3x := newi(IANDW);
+	addrsind(iand3x.s, Afp, tmp_x);
+	addrsind(iand3x.m, Amp, m4off);
+	addrsind(iand3x.d, Afp, tmp_x);
+	iadd3 := newi(IADDW);
+	addrsind(iadd3.s, Afp, tmp_t);
+	addrsind(iadd3.m, Afp, tmp_x);
+	addrsind(iadd3.d, Afp, tmp_x);
+
+	# Step 4: x = (x & m8) + ((x >> 8) & m8)
+	ilsr4 := newi(ILSRW);
+	addrimm(ilsr4.s, 8);
+	addrsind(ilsr4.m, Afp, tmp_x);
+	addrsind(ilsr4.d, Afp, tmp_t);
+	iand4t := newi(IANDW);
+	addrsind(iand4t.s, Afp, tmp_t);
+	addrsind(iand4t.m, Amp, m8off);
+	addrsind(iand4t.d, Afp, tmp_t);
+	iand4x := newi(IANDW);
+	addrsind(iand4x.s, Afp, tmp_x);
+	addrsind(iand4x.m, Amp, m8off);
+	addrsind(iand4x.d, Afp, tmp_x);
+	iadd4 := newi(IADDW);
+	addrsind(iadd4.s, Afp, tmp_t);
+	addrsind(iadd4.m, Afp, tmp_x);
+	addrsind(iadd4.d, Afp, tmp_x);
+
+	# Step 5: x = (x & m16) + ((x >> 16) & m16)
+	ilsr5 := newi(ILSRW);
+	addrimm(ilsr5.s, 16);
+	addrsind(ilsr5.m, Afp, tmp_x);
+	addrsind(ilsr5.d, Afp, tmp_t);
+	iand5t := newi(IANDW);
+	addrsind(iand5t.s, Afp, tmp_t);
+	addrsind(iand5t.m, Amp, m16off);
+	addrsind(iand5t.d, Afp, tmp_t);
+	iand5x := newi(IANDW);
+	addrsind(iand5x.s, Afp, tmp_x);
+	addrsind(iand5x.m, Amp, m16off);
+	addrsind(iand5x.d, Afp, tmp_x);
+	iadd5 := newi(IADDW);
+	addrsind(iadd5.s, Afp, tmp_t);
+	addrsind(iadd5.m, Afp, tmp_x);
+	*iadd5.d = *Wi.dst;
+
+	# Release temp registers
+	relreg(iand0.d);
+	relreg(ilsr1.d);
+}
+
+#
+# Translate i64 binary arithmetic operation (commutative).
 #
 
 xi64binop(disop: int)
@@ -152,6 +1045,23 @@ xi64binop(disop: int)
 	} else {
 		*i.s = *wsrc(1);
 		*i.m = *wsrc(0);
+	}
+	*i.d = *Wi.dst;
+}
+
+#
+# Translate i64 binary arithmetic operation (non-commutative).
+#
+
+xi64binop_nc(disop: int)
+{
+	i := newi(disop);
+	if(Wi.src1pc >= 0 && Wi.src2pc >= 0) {
+		*i.s = *wcodes[Wi.src2pc].dst;
+		*i.m = *wcodes[Wi.src1pc].dst;
+	} else {
+		*i.s = *wsrc(0);
+		*i.m = *wsrc(1);
 	}
 	*i.d = *Wi.dst;
 }
@@ -200,6 +1110,57 @@ xi32cmp(disbranchop: int)
 }
 
 #
+# Translate i32 unsigned comparison.
+# Mask both operands to 32 bits before comparing to treat them as unsigned.
+#
+
+xi32cmp_unsigned(disbranchop: int)
+{
+	# Allocate temps for masked values
+	tmp1 := getreg(DIS_W);
+	tmp2 := getreg(DIS_W);
+	mask32off := mpbig(big 16rFFFFFFFF);
+
+	# Mask first operand (src1 = deeper in stack)
+	iand1 := newi(IANDW);
+	if(Wi.src1pc >= 0)
+		*iand1.s = *wcodes[Wi.src1pc].dst;
+	else
+		*iand1.s = *wsrc(1);
+	addrsind(iand1.m, Amp, mask32off);
+	addrsind(iand1.d, Afp, tmp1);
+
+	# Mask second operand (src2 = top of stack)
+	iand2 := newi(IANDW);
+	if(Wi.src2pc >= 0)
+		*iand2.s = *wcodes[Wi.src2pc].dst;
+	else
+		*iand2.s = *wsrc(0);
+	addrsind(iand2.m, Amp, mask32off);
+	addrsind(iand2.d, Afp, tmp2);
+
+	# Set destination to 1 (true)
+	iset := newi(IMOVW);
+	addrimm(iset.s, 1);
+	*iset.d = *Wi.dst;
+
+	# Branch over the "set to 0" if condition is true
+	ibr := newi(disbranchop);
+	addrsind(ibr.s, Afp, tmp1);
+	addrsind(ibr.m, Afp, tmp2);
+	addrimm(ibr.d, pcdis + 1);  # skip next instruction
+
+	# Set destination to 0 (false)
+	iclr := newi(IMOVW);
+	addrimm(iclr.s, 0);
+	*iclr.d = *Wi.dst;
+
+	# Release temps
+	relreg(iand1.d);
+	relreg(iand2.d);
+}
+
+#
 # Translate i64 comparison.
 #
 
@@ -245,18 +1206,33 @@ xfcmp(disbranchop: int)
 
 xi32eqz()
 {
+	# IMPORTANT: The source and destination might be the same register.
+	# We must copy the input to a temp before writing to dst.
+
+	tmp := getreg(DIS_W);
+
+	# Copy input to temp first
+	imov := newi(IMOVW);
+	*imov.s = *wsrc(0);
+	addrsind(imov.d, Afp, tmp);
+
+	# Set destination to 1 (true)
 	iset := newi(IMOVW);
 	addrimm(iset.s, 1);
 	*iset.d = *Wi.dst;
 
+	# Branch over the "set to 0" if input (from temp) == 0
 	ibr := newi(IBEQW);
-	*ibr.s = *wsrc(0);
+	addrsind(ibr.s, Afp, tmp);
 	addrimm(ibr.m, 0);
 	addrimm(ibr.d, pcdis + 1);
 
+	# Set destination to 0 (false)
 	iclr := newi(IMOVW);
 	addrimm(iclr.s, 0);
 	*iclr.d = *Wi.dst;
+
+	relreg(imov.d);
 }
 
 #
@@ -615,26 +1591,26 @@ xlatwinst()
 		xi32cmp(IBLTW);
 
 	Wi32_lt_u =>
-		# Unsigned comparison - use signed after adjustment
-		xi32cmp(IBLTW);  # simplified
+		# Unsigned comparison - mask to 32 bits then compare
+		xi32cmp_unsigned(IBLTW);
 
 	Wi32_gt_s =>
 		xi32cmp(IBGTW);
 
 	Wi32_gt_u =>
-		xi32cmp(IBGTW);  # simplified
+		xi32cmp_unsigned(IBGTW);
 
 	Wi32_le_s =>
 		xi32cmp(IBLEW);
 
 	Wi32_le_u =>
-		xi32cmp(IBLEW);  # simplified
+		xi32cmp_unsigned(IBLEW);
 
 	Wi32_ge_s =>
 		xi32cmp(IBGEW);
 
 	Wi32_ge_u =>
-		xi32cmp(IBGEW);  # simplified
+		xi32cmp_unsigned(IBGEW);
 
 	# i64 comparison operations
 	Wi64_eqz =>
@@ -709,33 +1685,36 @@ xlatwinst()
 		xfcmp(IBGEF);
 
 	# i32 unary operations
-	Wi32_clz or Wi32_ctz or Wi32_popcnt =>
-		# These need runtime support, generate placeholder
-		i = newi(IMOVW);
-		addrimm(i.s, 0);
-		*i.d = *Wi.dst;
+	Wi32_clz =>
+		xi32clz();
+
+	Wi32_ctz =>
+		xi32ctz();
+
+	Wi32_popcnt =>
+		xi32popcnt();
 
 	# i32 binary operations
 	Wi32_add =>
 		xi32binop(IADDW);
 
 	Wi32_sub =>
-		xi32binop(ISUBW);
+		xi32binop_nc(ISUBW);
 
 	Wi32_mul =>
 		xi32binop(IMULW);
 
 	Wi32_div_s =>
-		xi32binop(IDIVW);
+		xi32binop_nc(IDIVW);
 
 	Wi32_div_u =>
-		xi32binop(IDIVW);  # simplified, should use unsigned div
+		xi32binop_unsigned(IDIVW);
 
 	Wi32_rem_s =>
-		xi32binop(IMODW);
+		xi32binop_nc(IMODW);
 
 	Wi32_rem_u =>
-		xi32binop(IMODW);  # simplified
+		xi32binop_unsigned(IMODW);
 
 	Wi32_and =>
 		xi32binop(IANDW);
@@ -747,17 +1726,23 @@ xlatwinst()
 		xi32binop(IXORW);
 
 	Wi32_shl =>
-		xi32binop(ISHLW);
+		xi32shift(ISHLW);
 
 	Wi32_shr_s =>
-		xi32binop(ISHRW);
+		xi32shift(ISHRW);
 
 	Wi32_shr_u =>
-		xi32binop(ILSRW);
+		xi32shift_unsigned(ILSRW);
 
-	Wi32_rotl or Wi32_rotr =>
-		# Rotate operations - need special handling
-		xi32binop(ISHLW);  # placeholder
+	Wi32_rotl =>
+		# rotl(x, n) = (x << n) | (x >> (32-n)), where n is masked to 5 bits
+		# and x is treated as unsigned 32-bit
+		xi32rotl_simple();
+
+	Wi32_rotr =>
+		# rotr(x, n) = (x >> n) | (x << (32-n)), where n is masked to 5 bits
+		# and x is treated as unsigned 32-bit
+		xi32rotr_simple();
 
 	# i64 unary operations
 	Wi64_clz or Wi64_ctz or Wi64_popcnt =>
@@ -770,22 +1755,22 @@ xlatwinst()
 		xi64binop(IADDL);
 
 	Wi64_sub =>
-		xi64binop(ISUBL);
+		xi64binop_nc(ISUBL);
 
 	Wi64_mul =>
 		xi64binop(IMULL);
 
 	Wi64_div_s =>
-		xi64binop(IDIVL);
+		xi64binop_nc(IDIVL);
 
 	Wi64_div_u =>
-		xi64binop(IDIVL);  # simplified
+		xi64binop_nc(IDIVL);  # simplified
 
 	Wi64_rem_s =>
-		xi64binop(IMODL);
+		xi64binop_nc(IMODL);
 
 	Wi64_rem_u =>
-		xi64binop(IMODL);  # simplified
+		xi64binop_nc(IMODL);  # simplified
 
 	Wi64_and =>
 		xi64binop(IANDL);
@@ -797,13 +1782,13 @@ xlatwinst()
 		xi64binop(IXORL);
 
 	Wi64_shl =>
-		xi64binop(ISHLL);
+		xi64binop_nc(ISHLL);
 
 	Wi64_shr_s =>
-		xi64binop(ISHRL);
+		xi64binop_nc(ISHRL);
 
 	Wi64_shr_u =>
-		xi64binop(ILSRL);
+		xi64binop_nc(ILSRL);
 
 	Wi64_rotl or Wi64_rotr =>
 		xi64binop(ISHLL);  # placeholder
@@ -918,23 +1903,26 @@ xlatwinst()
 		*i.s = *wsrc(0);
 		*i.d = *Wi.dst;
 
-	# sign extension
+	# sign extension - shift left then arithmetic shift right
+	# On 64-bit Dis, we need to shift by 56/48 to put the value at the top
 	Wi32_extend8_s =>
 		i = newi(ISHLW);
-		addrimm(i.s, 24);
+		addrimm(i.s, 56);  # 64 - 8 = 56
 		*i.m = *wsrc(0);
 		*i.d = *Wi.dst;
 		i = newi(ISHRW);
-		addrimm(i.s, 24);
+		addrimm(i.s, 56);
+		*i.m = *Wi.dst;
 		*i.d = *Wi.dst;
 
 	Wi32_extend16_s =>
 		i = newi(ISHLW);
-		addrimm(i.s, 16);
+		addrimm(i.s, 48);  # 64 - 16 = 48
 		*i.m = *wsrc(0);
 		*i.d = *Wi.dst;
 		i = newi(ISHRW);
-		addrimm(i.s, 16);
+		addrimm(i.s, 48);
+		*i.m = *Wi.dst;
 		*i.d = *Wi.dst;
 
 	Wi64_extend8_s or Wi64_extend16_s or Wi64_extend32_s =>

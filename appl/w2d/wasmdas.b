@@ -192,7 +192,7 @@ loadobj(wasmfile: string): (ref Mod, string)
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], count);
 						l = ref Winst(opcode, count, -1, nil, 0, 0, nil, -1, nil, labels, nil, nil, -1, -1) :: l;
 					Wi32_const or Wi64_const =>
-						n := operand();
+						n := soperand();  # signed LEB128 for const values
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], n);
 						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
 					Wf32_const =>
@@ -241,13 +241,14 @@ loadobj(wasmfile: string): (ref Mod, string)
 	return (m, nil);
 }
 
+# Read unsigned LEB128 (for lengths, indices, etc.)
 operand(): int
 {
 	if(wasmptr >= len wasmobj)
 		return -1;
 
 	d := 0;
-	shift := 0;	
+	shift := 0;
 
 	for(;;) {
 		b := int wasmobj[wasmptr++];
@@ -264,6 +265,34 @@ operand(): int
 			return -1;
 	}
 	return 0;
+}
+
+# Read signed LEB128 (for i32.const and i64.const values)
+# Returns sign-extended value for 32-bit interpretation
+soperand(): int
+{
+	if(wasmptr >= len wasmobj)
+		return 0;
+
+	d := 0;
+	shift := 0;
+	b := 0;
+
+	for(;;) {
+		b = int wasmobj[wasmptr++];
+		d |= ((b & 16r7F) << shift);
+		shift += 7;
+		if((b & 16r80) == 0)
+			break;
+		if(wasmptr >= len wasmobj)
+			return 0;
+	}
+
+	# Sign extend if the sign bit (bit 6) of the last byte is set
+	if(shift < 64 && (b & 16r40) != 0)
+		d |= (int 16rFFFFFFFFFFFFFFFF) << shift;
+
+	return d;
 }
 
 getb(): int

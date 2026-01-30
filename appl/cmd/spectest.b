@@ -244,11 +244,19 @@ parsearg(jv: ref JValue): ref ParsedArg
 		String =>
 			case tv.s {
 			"i32" =>
-				return ref ParsedArg("i32", int vv.s, big 0, 0.0);
+				# Parse as big first, then sign-extend from 32 to 64 bits
+				# WASM i32 values in JSON are given as unsigned 32-bit
+				bval := big vv.s;
+				# Mask to 32 bits, then sign-extend using shift
+				ival := int (bval & big 16rFFFFFFFF);
+				# Shift left 32, then arithmetic right 32 to sign-extend
+				ival = (ival << 32) >> 32;
+				return ref ParsedArg("i32", ival, big 0, 0.0);
 			"i64" =>
 				return ref ParsedArg("i64", 0, big vv.s, 0.0);
 			"f32" =>
-				bits := int vv.s;
+				# Parse as big first to handle unsigned bit patterns
+				bits := int (big vv.s);
 				return ref ParsedArg("f32", 0, big 0, math->bits32real(bits));
 			"f64" =>
 				bits := big vv.s;
@@ -352,8 +360,14 @@ comparearg(a: ref Dispatcher->Arg, b: ref ParsedArg): int
 {
 	pick aa := a {
 	I32 =>
-		if(b.atype == "i32")
-			return aa.v == b.ival;
+		if(b.atype == "i32") {
+			# Compare as 32-bit values (mask to lower 32 bits)
+			mask := big 16rFFFFFFFF;
+			av := big aa.v & mask;
+			bv := big b.ival & mask;
+			# sys->print("DEBUG: aa.v=%bd, b.ival=%bd, av=%bd, bv=%bd\n", big aa.v, big b.ival, av, bv);
+			return av == bv;
+		}
 	I64 =>
 		if(b.atype == "i64")
 			return aa.v == b.bval;
