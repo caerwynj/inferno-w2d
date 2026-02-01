@@ -149,6 +149,21 @@ loadobj(wasmfile: string): (ref Mod, string)
 				m.exportsection.exports[i++] = ref Export(name, kind, idx);
 				vlen--;
 			}
+		SMEMORY =>
+			m.memorysection = ref MemorySection;
+			m.memorysection.size = slen;
+			vlen := operand();
+			m.memorysection.memories = array[vlen] of ref Memory;
+			i := 0;
+			while (vlen > 0) {
+				flags := getb();  # 0 = min only, 1 = min and max
+				min := operand();
+				max := -1;
+				if(flags == 1)
+					max = operand();
+				m.memorysection.memories[i++] = ref Memory(min, max);
+				vlen--;
+			}
 		* =>
 			wasmptr += slen;
 		}

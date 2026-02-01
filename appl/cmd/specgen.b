@@ -212,6 +212,7 @@ genDispatch(m: ref Mod, basename: string, outfile: string)
 	# Write WASM module interface
 	sys->fprint(fd, "# WASM module interface\n");
 	sys->fprint(fd, "%s: module {\n", wasmmodname);
+	# NOTE: Not generating init - using stub memory implementation
 
 	if(m.exportsection != nil) {
 		for(i := 0; i < len m.exportsection.exports; i++) {
@@ -263,7 +264,7 @@ genDispatch(m: ref Mod, basename: string, outfile: string)
 				continue;
 
 			fname := sanitizename(exp.name);
-			sys->fprint(fd, "\t\"%s\" =>\n", exp.name);  # Use original export name for case match
+			sys->fprint(fd, "\t\"%s\" =>\n", fname);  # Use sanitized name to match what spectest sends
 			genCall(fd, fname, ft);  # Use sanitized name for Limbo call
 		}
 	}

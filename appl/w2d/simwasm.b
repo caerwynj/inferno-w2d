@@ -16,6 +16,9 @@ wcode:		array of ref Winst;	# current function's code
 
 wreturnaddr:	ref Addr;		# address of function return value (stack top at end)
 
+# Module reference for function calls
+wmod:		ref Mod;
+
 #
 # Push a result onto the simulated stack.
 #
@@ -265,6 +268,15 @@ simwinst(pc: int)
 		# Resolve all branch targets
 		if(Wi.brtable != nil) {
 			Wi.brtargets = array[len Wi.brtable] of int;
+			# Use default label's block to get result type (all targets must have compatible types)
+			defaultlabelidx := Wi.brtable[len Wi.brtable - 1];
+			defaultblk := wgetlabel(defaultlabelidx);
+			Wi.targettype = defaultblk.resulttype;
+			# If target block has result type, capture the kept value (below the index)
+			if(defaultblk.resulttype != -1 && defaultblk.resulttype != 16r40 && wtos > 0) {
+				r = wpeek(0);
+				Wi.branchsrc = wgetsrc(r);
+			}
 			for(i := 0; i < len Wi.brtable; i++) {
 				labelidx := Wi.brtable[i];
 				blk := wgetlabel(labelidx);
@@ -284,12 +296,45 @@ simwinst(pc: int)
 
 	Wcall =>
 		# function call - arg1 is function index
-		;  # handled specially in wxlate
+		funcidx := Wi.arg1;
+		if(wmod != nil && wmod.funcsection != nil && wmod.typesection != nil &&
+		   funcidx >= 0 && funcidx < len wmod.funcsection.funcs) {
+			typeidx := wmod.funcsection.funcs[funcidx];
+			calleetype := wmod.typesection.types[typeidx];
+
+			# Pop arguments (they're on stack in order: arg0 deepest, argN-1 on top)
+			for(ai := len calleetype.args - 1; ai >= 0; ai--) {
+				r = wpop();
+				# Don't release - wxlate copies them to callee frame
+			}
+
+			# Push return value if any
+			if(len calleetype.rets > 0) {
+				wallocdst(pc, calleetype.rets[0]);
+				wpush(ref WResult(calleetype.rets[0], pc));
+			}
+		}
 
 	Wcall_indirect =>
-		# indirect call - pops table index
-		r = wpop();
+		# indirect call - arg1 is type index, pops [args..., table_index]
+		r = wpop();  # table index
 		wreldst(r.pc);
+		# Pop arguments based on type signature
+		typeidx := Wi.arg1;
+		if(wmod != nil && wmod.typesection != nil &&
+		   typeidx >= 0 && typeidx < len wmod.typesection.types) {
+			calleetype := wmod.typesection.types[typeidx];
+			# Pop arguments
+			for(ai := len calleetype.args - 1; ai >= 0; ai--) {
+				r = wpop();
+				wreldst(r.pc);
+			}
+			# Push return value if any
+			if(len calleetype.rets > 0) {
+				wallocdst(pc, calleetype.rets[0]);
+				wpush(ref WResult(calleetype.rets[0], pc));
+			}
+		}
 
 	# parametric instructions
 	Wdrop =>
@@ -300,6 +345,10 @@ simwinst(pc: int)
 		r3 = wpop();  # condition
 		r2 = wpop();  # val2
 		r1 = wpop();  # val1
+		# Record source PCs BEFORE releasing registers
+		Wi.src1pc = r1.pc;
+		Wi.src2pc = r2.pc;
+		Wi.src3pc = r3.pc;
 		wreldst(r3.pc);
 		wreldst(r2.pc);
 		wreldst(r1.pc);
@@ -420,6 +469,9 @@ simwinst(pc: int)
 	Wi32_le_s or Wi32_le_u or Wi32_ge_s or Wi32_ge_u =>
 		r2 = wpop();
 		r1 = wpop();
+		# Record source PCs BEFORE releasing registers
+		Wi.src1pc = r1.pc;
+		Wi.src2pc = r2.pc;
 		wallocdst(pc, I32);
 		wreldst(r2.pc);
 		wreldst(r1.pc);

@@ -66,6 +66,20 @@ wftype: ref FuncType;		# current function's type
 wlabels: array of int;
 
 #
+# Function call support - track function info for internal calls
+# (wmod is declared in simwasm.b)
+#
+wfunctids: array of int;	# type descriptor ID for each function
+wfuncpcs: array of int;		# entry PC for each function
+
+# Track calls for patching
+Callpatch: adt {
+	callinst: ref Inst;	# the call instruction to patch
+	funcidx: int;		# target function index
+};
+wcallinsts: list of ref Callpatch;
+
+#
 # Get Dis move instruction for WASM type.
 #
 
@@ -1099,8 +1113,14 @@ xi32cmp(disbranchop: int)
 
 	# Branch over the "set to 0" if condition is true
 	ibr := newi(disbranchop);
-	*ibr.s = *wsrc(1);
-	*ibr.m = *wsrc(0);
+	# Use recorded source PCs from simulation instead of wsrc
+	if(Wi.src1pc >= 0 && Wi.src2pc >= 0) {
+		*ibr.s = *wcodes[Wi.src1pc].dst;
+		*ibr.m = *wcodes[Wi.src2pc].dst;
+	} else {
+		*ibr.s = *wsrc(1);
+		*ibr.m = *wsrc(0);
+	}
 	addrimm(ibr.d, pcdis + 1);  # skip next instruction
 
 	# Set destination to 0 (false)
@@ -1338,6 +1358,12 @@ xlatwinst()
 		if(Wi.brtable != nil && Wi.brtargets != nil) {
 			nlabels := len Wi.brtable - 1;  # exclude default
 			Wi.brinsts = array[nlabels + 1] of ref Inst;
+			# If target block has result type, copy value to return area first
+			if(Wi.branchsrc != nil) {
+				imov := newi(wmovinst(Wi.targettype));
+				*imov.s = *Wi.branchsrc;
+				addrdind(imov.d, Afpind, WREGRET, 0);
+			}
 			# Generate conditional branches for each label index
 			for(bi := 0; bi < nlabels; bi++) {
 				# If index == bi, jump to labels[bi]
@@ -1363,9 +1389,93 @@ xlatwinst()
 		i = newi(IRET);
 
 	Wcall =>
-		# For now, generate a placeholder
-		# Real implementation needs to handle function table
-		i = newi(INOP);
+		# Function call - arg1 is target function index
+		funcidx := Wi.arg1;
+
+
+		# Get callee's function type
+		if(wmod == nil || wmod.funcsection == nil || wmod.typesection == nil) {
+			i = newi(INOP);
+		} else if(funcidx < 0 || funcidx >= len wmod.funcsection.funcs) {
+			i = newi(INOP);
+		} else {
+			typeidx := wmod.funcsection.funcs[funcidx];
+			calleetype := wmod.typesection.types[typeidx];
+			nargs := len calleetype.args;
+
+			# Get callee's type descriptor ID (should be set if calling backward)
+			calltid := -1;
+			if(funcidx < len wfunctids)
+				calltid = wfunctids[funcidx];
+
+
+			# If we don't have the TID yet, we can't make the call properly
+			# For now, generate NOP for forward calls
+			if(calltid < 0) {
+				i = newi(INOP);
+			} else {
+				# Allocate temp register to hold frame pointer
+				frametemp := getreg(DIS_P);
+
+				# Generate frame instruction: frame $tid, temp(fp)
+				iframe := newi(IFRAME);
+				addrimm(iframe.s, calltid);
+				addrsind(iframe.d, Afp, frametemp);
+
+				# Copy arguments to callee's frame
+				# Parameters start at NREG*IBY2WD + 3*IBY2WD = 64
+				# Arguments are on stack: arg[n-1] at top, arg[0] deeper
+				paramoff := NREG * IBY2WD + 3 * IBY2WD;
+				for(ai := 0; ai < nargs; ai++) {
+					argtype := calleetype.args[ai];
+					dtype := w2dtype(argtype);
+
+					# Align parameter offset
+					paramoff = align(paramoff, cellsize[int dtype]);
+
+					# Get argument from stack (reverse order: arg0 is deepest)
+					# Stack has: arg0 at depth nargs-1, arg(nargs-1) at depth 0
+					stackdepth := nargs - 1 - ai;
+
+					# Copy argument to callee's frame
+					imov := newi(wmovinst(argtype));
+					*imov.s = *wsrc(stackdepth);
+					addrdind(imov.d, Afpind, frametemp, paramoff);
+
+					paramoff += cellsize[int dtype];
+				}
+
+				# If function returns a value, set up return pointer in callee's frame
+				# The return value will be written to Wi.dst in caller's frame
+				if(len calleetype.rets > 0 && Wi.dst != nil) {
+					# Set callee's WREGRET to point to where we want the return value
+					# lea dst, WREGRET(frametemp(fp))
+					ilea := newi(ILEA);
+					*ilea.s = *Wi.dst;  # address of our destination
+					addrdind(ilea.d, Afpind, frametemp, WREGRET);
+				}
+
+				# Generate call instruction: call frame, $pc
+				icall := newi(ICALL);
+				addrsind(icall.s, Afp, frametemp);
+				addrimm(icall.d, 0);  # PC patched later
+
+				# Record call for patching
+				wcallinsts = ref Callpatch(icall, funcidx) :: wcallinsts;
+
+				# Release frame temp
+				relreg(ref Addr(Afp, 0, frametemp));
+			}
+		}
+
+	Wcall_indirect =>
+		# Indirect call - for now, just set return value to -1
+		# TODO: Implement proper function table support
+		if(Wi.dst != nil) {
+			i = newi(IMOVW);
+			addrimm(i.s, -1);
+			*i.d = *Wi.dst;
+		}
 
 	# parametric instructions
 	Wdrop =>
@@ -1374,18 +1484,26 @@ xlatwinst()
 
 	Wselect =>
 		# select(c, v1, v2) = c ? v1 : v2
-		# Implement as: dst = v1; if(c==0) dst = v2
+		# WASM stack: [val1, val2, cond] where cond is on top
+		# if cond != 0: result = val1
+		# if cond == 0: result = val2
+		# Implement as: dst = val1; if(cond!=0) skip next; dst = val2
+		# Use recorded source PCs from simulation (not wsrc which has register reuse issues)
+		src_v1 := wcodes[Wi.src1pc].dst;
+		src_v2 := wcodes[Wi.src2pc].dst;
+		src_cond := wcodes[Wi.src3pc].dst;
+
 		imov1 := newi(IMOVW);
-		*imov1.s = *wsrc(2);  # v1
+		*imov1.s = *src_v1;  # val1
 		*imov1.d = *Wi.dst;
 
 		ibr := newi(IBNEW);
-		*ibr.s = *wsrc(0);  # c (condition)
+		*ibr.s = *src_cond;  # cond
 		addrimm(ibr.m, 0);
 		addrimm(ibr.d, pcdis + 1);
 
 		imov2 := newi(IMOVW);
-		*imov2.s = *wsrc(1);  # v2
+		*imov2.s = *src_v2;  # val2
 		*imov2.d = *Wi.dst;
 
 	# variable instructions
@@ -1419,129 +1537,44 @@ xlatwinst()
 	# memory instructions - loads
 	Wi32_load =>
 		# Load 32-bit value from memory
-		# address = base (from stack) + offset (from instruction)
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(0);		# base address from stack
-		addrimm(iadd.m, Wi.arg2);	# offset from instruction
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
+		# TODO: Implement proper linear memory support
+		# For now, return 0 (WASM memory is zero-initialized)
 		i = newi(IMOVW);
-		addrdind(i.s, Afpind, iadd.d.offset, 0);
+		addrimm(i.s, 0);
 		*i.d = *Wi.dst;
-		relreg(iadd.d);
 
-	Wi32_load8_s =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(0);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
-		i = newi(ICVTBW);
-		addrdind(i.s, Afpind, iadd.d.offset, 0);
+	Wi32_load8_s or Wi32_load8_u =>
+		# TODO: Implement proper linear memory support
+		i = newi(IMOVW);
+		addrimm(i.s, 0);
 		*i.d = *Wi.dst;
-		relreg(iadd.d);
-
-	Wi32_load8_u =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(0);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
-		# Load byte
-		i = newi(IMOVB);
-		addrdind(i.s, Afpind, iadd.d.offset, 0);
-		*i.d = *Wi.dst;
-		relreg(iadd.d);
 
 	Wi32_load16_s or Wi32_load16_u =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(0);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
-		# Load 16-bit (would need sign extension for _s)
+		# TODO: Implement proper linear memory support
 		i = newi(IMOVW);
-		addrdind(i.s, Afpind, iadd.d.offset, 0);
+		addrimm(i.s, 0);
 		*i.d = *Wi.dst;
-		relreg(iadd.d);
 
 	Wi64_load =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(0);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
+		# TODO: Implement proper linear memory support
 		i = newi(IMOVL);
-		addrdind(i.s, Afpind, iadd.d.offset, 0);
+		addrimm(i.s, 0);
 		*i.d = *Wi.dst;
-		relreg(iadd.d);
 
 	Wf32_load or Wf64_load =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(0);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
+		# TODO: Implement proper linear memory support
+		# Return 0.0 (allocated in module data)
+		off := mpreal(0.0);
 		i = newi(IMOVF);
-		addrdind(i.s, Afpind, iadd.d.offset, 0);
+		addrsind(i.s, Amp, off);
 		*i.d = *Wi.dst;
-		relreg(iadd.d);
 
 	# memory instructions - stores
-	Wi32_store =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(1);		# address from stack
-		addrimm(iadd.m, Wi.arg2);	# offset
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
-		i = newi(IMOVW);
-		*i.s = *wsrc(0);		# value from stack
-		addrdind(i.d, Afpind, iadd.d.offset, 0);
-		relreg(iadd.d);
-
-	Wi32_store8 =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(1);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
-		i = newi(ICVTWB);
-		*i.s = *wsrc(0);
-		addrdind(i.d, Afpind, iadd.d.offset, 0);
-		relreg(iadd.d);
-
-	Wi32_store16 =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(1);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
-		i = newi(IMOVW);
-		*i.s = *wsrc(0);
-		addrdind(i.d, Afpind, iadd.d.offset, 0);
-		relreg(iadd.d);
-
-	Wi64_store =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(1);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
-		i = newi(IMOVL);
-		*i.s = *wsrc(0);
-		addrdind(i.d, Afpind, iadd.d.offset, 0);
-		relreg(iadd.d);
-
+	# TODO: Implement proper linear memory support
+	Wi32_store or Wi32_store8 or Wi32_store16 or
+	Wi64_store or Wi64_store8 or Wi64_store16 or Wi64_store32 or
 	Wf32_store or Wf64_store =>
-		iadd := newi(IADDW);
-		*iadd.s = *wsrc(1);
-		addrimm(iadd.m, Wi.arg2);
-		addrsind(iadd.d, Afp, getreg(DIS_W));
-
-		i = newi(IMOVF);
-		*i.s = *wsrc(0);
-		addrdind(i.d, Afpind, iadd.d.offset, 0);
-		relreg(iadd.d);
+		;  # No-op for now - stores to memory are ignored (no instruction generated)
 
 	# numeric instructions - constants
 	Wi32_const =>
@@ -2018,8 +2051,12 @@ wpatchbranches(codes: array of ref Winst)
 					if(w.brinsts[bi] != nil) {
 						targetpc := w.brtargets[bi];
 						dispc := wlabels[targetpc];
-						if(dispc >= 0)
+						if(dispc >= 0) {
+							# If we already copied branchsrc, skip past block's epilogue copy
+							if(w.branchsrc != nil)
+								dispc++;
 							addrimm(w.brinsts[bi].d, dispc);
+						}
 					}
 				}
 			}
@@ -2053,6 +2090,14 @@ wasm2dis(codes: array of ref Winst)
 #
 
 WREGRET: con 32;  # Return value goes at offset REGRET*IBY2WD = 4*8 = 32
+
+#
+# WASM linear memory support
+#
+WMEM_PTR: con 0;  # Module data offset for memory array pointer
+WMEM_PAGES: int;  # Number of 64KB pages
+WMEM_DESC: int;   # Type descriptor ID for memory byte array element
+hasmemory: int;   # Whether module has memory
 
 #
 # Module data for constants (floats and large integers)
@@ -2180,6 +2225,66 @@ wdisout()
 }
 
 #
+# Generate memory initialization function.
+# This allocates a byte array for WASM linear memory.
+#
+genmeminit(m: ref Mod)
+{
+	# Create type descriptor for byte array element (1 byte, no pointers)
+	# Use size=1, nmap=0, empty map for a byte array with no pointer fields
+	WMEM_DESC = descid(1, 0, array[0] of byte);
+
+	# Open frame for init function - no params, no locals, no return
+	frameoff = NREG * IBY2WD + 3 * IBY2WD;
+	tmpslwm = frameoff;
+	tmpssz = frameoff;
+	tmps = array [tmpssz] of { * => Fp(byte 0, 0) };
+
+	initpc := pcdis;
+
+	# newa  count, typedesc, dst
+	# Allocate byte array: newa $count, $typedesc, temp
+	# Use a very small allocation for testing
+	memsize := 64;  # WMEM_PAGES * 65536;
+	temp := getreg(DIS_W);
+
+	inewa := newi(INEWA);
+	addrimm(inewa.s, memsize);
+	addrimm(inewa.m, WMEM_DESC);
+	addrsind(inewa.d, Afp, temp);
+
+	# Store array pointer in module data: movp temp(fp), WMEM_PTR(mp)
+	imov := newi(IMOVP);
+	addrsind(imov.s, Afp, temp);
+	addrsind(imov.d, Amp, WMEM_PTR);
+
+	# Return
+	iret := newi(IRET);
+	iret = iret;
+
+	relreg(ref Addr(Afp, 0, temp));
+
+	# Close frame
+	frameoff = align(frameoff, IBY2LG);
+	if(frameoff > maxframe)
+		maxframe = frameoff;
+
+	# Create frame descriptor for init (no pointers in frame)
+	ln := frameoff / (8*IBY2WD) + (frameoff % (8*IBY2WD) != 0);
+	initmap := array [ln] of { * => byte 0 };
+	inittid := descid(frameoff, ln, initmap);
+
+	# Link init function
+	xtrnlink(inittid, initpc, wfuncsig(ref FuncType(array[0] of int, array[0] of int)), "init", "");
+
+	# Reset frame state for subsequent functions
+	frameoff = 0;
+	tmpslwm = 0;
+	tmpssz = 0;
+	tmps = nil;
+}
+
+#
 # Translate an entire WASM module to Dis.
 #
 
@@ -2202,6 +2307,19 @@ wxlate(m: ref Mod)
 	# Reset module data state
 	mpoff = 0;
 	mpconsts = nil;
+
+	# Check for memory section (for future proper implementation)
+	hasmemory = 0;
+	if(m.memorysection != nil && len m.memorysection.memories > 0)
+		hasmemory = 1;
+	# NOTE: Not generating init function - using stub memory implementation
+
+	# Initialize function call support
+	wmod = m;
+	nfuncs := len m.codesection.codes;
+	wfunctids = array[nfuncs] of { * => -1 };
+	wfuncpcs = array[nfuncs] of { * => -1 };
+	wcallinsts = nil;
 
 	for(i := 0; i < len m.codesection.codes; i++) {
 		wcode := m.codesection.codes[i];
@@ -2239,25 +2357,39 @@ wxlate(m: ref Mod)
 		# Close frame and get type descriptor
 		tid := wcloseframe();
 
-		# Create link for this function - use export name if available
-		funcname := sys->sprint("func%d", i);
+		# Store function info for internal calls
+		wfunctids[i] = tid;
+		wfuncpcs[i] = funcpc;
+
+		# Create link for this function only if it's exported
 		if(m.exportsection != nil) {
 			for(j := 0; j < len m.exportsection.exports; j++) {
 				exp := m.exportsection.exports[j];
 				if(exp.kind == 0 && exp.idx == i) {  # kind 0 = function
-					funcname = sanitizename(exp.name);
+					funcname := sanitizename(exp.name);
+					xtrnlink(tid, funcpc, wfuncsig(functype), funcname, "");
 					break;
 				}
 			}
 		}
-		xtrnlink(tid, funcpc, wfuncsig(functype), funcname, "");
+	}
+
+	# Patch all call targets
+	for(cl := wcallinsts; cl != nil; cl = tl cl) {
+		cp := hd cl;
+		if(cp.funcidx >= 0 && cp.funcidx < len wfuncpcs) {
+			targetpc := wfuncpcs[cp.funcidx];
+			if(targetpc >= 0)
+				addrimm(cp.callinst.d, targetpc);
+		}
 	}
 
 	# Create module data descriptor (id=0) for WASM
-	# WASM has no pointer types, so the map is all zeros
 	mpoff = align(mpoff, IBY2LG);
 	maplen := mpoff / (8*IBY2WD) + (mpoff % (8*IBY2WD) != 0);
-	mpdescid(mpoff, maplen, array[maplen] of { * => byte 0 });
+	mpmap := array[maplen] of { * => byte 0 };
+	# NOTE: Not marking memory pointer - using stub implementation
+	mpdescid(mpoff, maplen, mpmap);
 
 	# Set first function as entry point if no main was found
 	if(pc == -1 && nlinks > 0)

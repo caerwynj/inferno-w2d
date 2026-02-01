@@ -282,7 +282,7 @@ sanitizename(name: string): string
 	s := "";
 	for(i := 0; i < len name; i++) {
 		c := name[i];
-		if(c == '-')
+		if(c == '-' || c == '.')
 			s[len s] = '_';
 		else
 			s[len s] = c;

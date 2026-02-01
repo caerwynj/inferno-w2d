@@ -92,6 +92,16 @@ Wasm: module
 		exports: array of ref Export;
 	};
 
+	Memory: adt {
+		min: int;
+		max: int;  # -1 if no max
+	};
+
+	MemorySection: adt {
+		size: int;
+		memories: array of ref Memory;
+	};
+
 	Mod: adt
 	{
 		magic:  	int;
@@ -102,6 +112,7 @@ Wasm: module
 		funcsection: ref FuncSection;
 		codesection: ref CodeSection;
 		exportsection: ref ExportSection;
+		memorysection: ref MemorySection;
 	};
 
 	init:		fn();

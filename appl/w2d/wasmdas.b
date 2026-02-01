@@ -152,12 +152,12 @@ loadobj(wasmfile: string): (ref Mod, string)
 						blocktype := getb();
 						depth++;
 						if(DEBUG)sys->print("%s 0x%x\n", optab[opcode], blocktype);
-						l = ref Winst(opcode, blocktype, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, blocktype, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					Wend =>
 						depth--;
 						if(depth > 0) {
 							if(DEBUG)sys->print("%s\n", optab[opcode]);
-							l = ref Winst(opcode, -1, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+							l = ref Winst(opcode, -1, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 						}
 					Wi32_load or Wi64_load or Wf32_load or Wf64_load or
 					Wi32_load8_s or Wi32_load8_u or Wi32_load16_s or Wi32_load16_u or
@@ -169,20 +169,20 @@ loadobj(wasmfile: string): (ref Mod, string)
 						align := operand();
 						offset := operand();
 						if(DEBUG)sys->print("%s %d %d\n", optab[opcode], align, offset);
-						l = ref Winst(opcode, align, offset, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, align, offset, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					Wlocal_get or Wlocal_set or Wlocal_tee or Wglobal_get or Wglobal_set =>
 						n := operand();
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					Wbr or Wbr_if or Wcall =>
 						idx := operand();
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], idx);
-						l = ref Winst(opcode, idx, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, idx, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					Wcall_indirect =>
 						tidx := operand();
 						tabidx := operand();
 						if(DEBUG)sys->print("%s %d %d\n", optab[opcode], tidx, tabidx);
-						l = ref Winst(opcode, tidx, tabidx, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, tidx, tabidx, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					Wbr_table =>
 						count := operand();
 						# count is number of labels, plus one for the default
@@ -190,23 +190,23 @@ loadobj(wasmfile: string): (ref Mod, string)
 						for(bi := 0; bi <= count; bi++)
 							labels[bi] = operand();
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], count);
-						l = ref Winst(opcode, count, -1, nil, 0, 0, nil, -1, nil, labels, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, count, -1, nil, 0, 0, nil, -1, nil, labels, nil, nil, -1, -1, -1) :: l;
 					Wi32_const or Wi64_const =>
 						n := soperand();  # signed LEB128 for const values
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					Wf32_const =>
 						n := getw();
 						if(DEBUG)sys->print("%s 0x%x\n", optab[opcode], n);
-						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, n, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					Wf64_const =>
 						nlo := getw();
 						nhi := getw();
 						if(DEBUG)sys->print("%s 0x%x 0x%x\n", optab[opcode], nhi, nlo);
-						l = ref Winst(opcode, nlo, nhi, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, nlo, nhi, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					* =>
 						if(DEBUG)sys->print("%s\n", optab[opcode]);
-						l = ref Winst(opcode, -1, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1) :: l;
+						l = ref Winst(opcode, -1, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 						;
 					}
 					if(depth > 0)
@@ -230,6 +230,22 @@ loadobj(wasmfile: string): (ref Mod, string)
 				idx := operand();
 				if(DEBUG)sys->print("EXPORT: %s kind=%d idx=%d\n", name, kind, idx);
 				m.exportsection.exports[i++] = ref Export(name, kind, idx);
+				vlen--;
+			}
+		SMEMORY =>
+			m.memorysection = ref MemorySection;
+			m.memorysection.size = slen;
+			vlen := operand();
+			m.memorysection.memories = array[vlen] of ref Memory;
+			i := 0;
+			while (vlen > 0) {
+				flags := getb();  # 0 = min only, 1 = min and max
+				min := operand();
+				max := -1;
+				if(flags == 1)
+					max = operand();
+				if(DEBUG)sys->print("MEMORY: min=%d max=%d\n", min, max);
+				m.memorysection.memories[i++] = ref Memory(min, max);
 				vlen--;
 			}
 		* =>

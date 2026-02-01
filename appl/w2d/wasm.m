@@ -94,6 +94,7 @@ Winst: adt {
 	# Source operand tracking (set during simulation for operations)
 	src1pc: int;		# WASM PC of instruction producing first operand
 	src2pc: int;		# WASM PC of instruction producing second operand
+	src3pc: int;		# WASM PC of instruction producing third operand (for select)
 };
 
 Wcode:adt {
@@ -123,6 +124,16 @@ ExportSection: adt {
 	exports: array of ref Export;
 };
 
+Memory: adt {
+	min: int;
+	max: int;  # -1 if no max
+};
+
+MemorySection: adt {
+	size: int;
+	memories: array of ref Memory;
+};
+
 Mod: adt
 {
 	magic:  	int;
@@ -133,4 +144,5 @@ Mod: adt
 	funcsection: ref FuncSection;
 	codesection: ref CodeSection;
 	exportsection: ref ExportSection;
+	memorysection: ref MemorySection;
 };
