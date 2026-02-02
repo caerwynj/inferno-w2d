@@ -1046,6 +1046,538 @@ xi32popcnt()
 }
 
 #
+# Translate i64 count leading zeros.
+# Uses binary search: check top half, if 0 then add bits and shift.
+# clz(0) = 64, clz(0x8000000000000000) = 0, clz(1) = 63
+#
+
+xi64clz()
+{
+	# Save starting PC for branch target calculation
+	start_pc := pcdis;
+	end_pc := start_pc + 31;  # 6 steps + zero check + NOPs
+
+	# Allocate registers (64-bit for value, 64-bit for count since result is i64)
+	tmp_x := getreg(DIS_L);  # working value
+	tmp_n := getreg(DIS_L);  # count (result is i64)
+	tmp_t := getreg(DIS_L);  # temporary for AND result
+
+	# Mask constants in module data (64-bit)
+	mask32off := mpbig(big 16rFFFFFFFF00000000);
+	mask16off := mpbig(big 16rFFFF000000000000);
+	mask8off := mpbig(big 16rFF00000000000000);
+	mask4off := mpbig(big 16rF000000000000000);
+	mask2off := mpbig(big 16rC000000000000000);
+	mask1off := mpbig(big 16r8000000000000000);
+
+	# PC 0: x = input (copy to working register)
+	imov0 := newi(IMOVL);
+	if(Wi.src1pc >= 0)
+		*imov0.s = *wcodes[Wi.src1pc].dst;
+	else
+		*imov0.s = *wsrc(0);
+	addrsind(imov0.d, Afp, tmp_x);
+
+	# PC 1: if x != 0, skip to PC 4
+	ibr_nz := newi(IBNEL);
+	addrsind(ibr_nz.s, Afp, tmp_x);
+	addrimm(ibr_nz.m, 0);
+	addrimm(ibr_nz.d, start_pc + 4);
+
+	# PC 2: dst = 64 (zero case)
+	imov_64 := newi(IMOVL);
+	addrimm(imov_64.s, 64);
+	*imov_64.d = *Wi.dst;
+
+	# PC 3: jump to end
+	ijmp := newi(IJMP);
+	addrimm(ijmp.d, end_pc);
+
+	# PC 4: n = 0
+	imov_n := newi(IMOVL);
+	addrimm(imov_n.s, 0);
+	addrsind(imov_n.d, Afp, tmp_n);
+
+	# Step 1: if ((x & 0xFFFFFFFF00000000) == 0) { n += 32; x <<= 32; }
+	# PC 5
+	iand1 := newi(IANDL);
+	addrsind(iand1.s, Afp, tmp_x);
+	addrsind(iand1.m, Amp, mask32off);
+	addrsind(iand1.d, Afp, tmp_t);
+	# PC 6
+	ibr1 := newi(IBNEL);
+	addrsind(ibr1.s, Afp, tmp_t);
+	addrimm(ibr1.m, 0);
+	addrimm(ibr1.d, start_pc + 9);
+	# PC 7
+	iadd1 := newi(IADDL);
+	addrimm(iadd1.s, 32);
+	addrsind(iadd1.m, Afp, tmp_n);
+	addrsind(iadd1.d, Afp, tmp_n);
+	# PC 8
+	ishl1 := newi(ISHLL);
+	addrimm(ishl1.s, 32);
+	addrsind(ishl1.m, Afp, tmp_x);
+	addrsind(ishl1.d, Afp, tmp_x);
+
+	# Step 2: if ((x & 0xFFFF000000000000) == 0) { n += 16; x <<= 16; }
+	# PC 9
+	iand2 := newi(IANDL);
+	addrsind(iand2.s, Afp, tmp_x);
+	addrsind(iand2.m, Amp, mask16off);
+	addrsind(iand2.d, Afp, tmp_t);
+	# PC 10
+	ibr2 := newi(IBNEL);
+	addrsind(ibr2.s, Afp, tmp_t);
+	addrimm(ibr2.m, 0);
+	addrimm(ibr2.d, start_pc + 13);
+	# PC 11
+	iadd2 := newi(IADDL);
+	addrimm(iadd2.s, 16);
+	addrsind(iadd2.m, Afp, tmp_n);
+	addrsind(iadd2.d, Afp, tmp_n);
+	# PC 12
+	ishl2 := newi(ISHLL);
+	addrimm(ishl2.s, 16);
+	addrsind(ishl2.m, Afp, tmp_x);
+	addrsind(ishl2.d, Afp, tmp_x);
+
+	# Step 3: if ((x & 0xFF00000000000000) == 0) { n += 8; x <<= 8; }
+	# PC 13
+	iand3 := newi(IANDL);
+	addrsind(iand3.s, Afp, tmp_x);
+	addrsind(iand3.m, Amp, mask8off);
+	addrsind(iand3.d, Afp, tmp_t);
+	# PC 14
+	ibr3 := newi(IBNEL);
+	addrsind(ibr3.s, Afp, tmp_t);
+	addrimm(ibr3.m, 0);
+	addrimm(ibr3.d, start_pc + 17);
+	# PC 15
+	iadd3 := newi(IADDL);
+	addrimm(iadd3.s, 8);
+	addrsind(iadd3.m, Afp, tmp_n);
+	addrsind(iadd3.d, Afp, tmp_n);
+	# PC 16
+	ishl3 := newi(ISHLL);
+	addrimm(ishl3.s, 8);
+	addrsind(ishl3.m, Afp, tmp_x);
+	addrsind(ishl3.d, Afp, tmp_x);
+
+	# Step 4: if ((x & 0xF000000000000000) == 0) { n += 4; x <<= 4; }
+	# PC 17
+	iand4 := newi(IANDL);
+	addrsind(iand4.s, Afp, tmp_x);
+	addrsind(iand4.m, Amp, mask4off);
+	addrsind(iand4.d, Afp, tmp_t);
+	# PC 18
+	ibr4 := newi(IBNEL);
+	addrsind(ibr4.s, Afp, tmp_t);
+	addrimm(ibr4.m, 0);
+	addrimm(ibr4.d, start_pc + 21);
+	# PC 19
+	iadd4 := newi(IADDL);
+	addrimm(iadd4.s, 4);
+	addrsind(iadd4.m, Afp, tmp_n);
+	addrsind(iadd4.d, Afp, tmp_n);
+	# PC 20
+	ishl4 := newi(ISHLL);
+	addrimm(ishl4.s, 4);
+	addrsind(ishl4.m, Afp, tmp_x);
+	addrsind(ishl4.d, Afp, tmp_x);
+
+	# Step 5: if ((x & 0xC000000000000000) == 0) { n += 2; x <<= 2; }
+	# PC 21
+	iand5 := newi(IANDL);
+	addrsind(iand5.s, Afp, tmp_x);
+	addrsind(iand5.m, Amp, mask2off);
+	addrsind(iand5.d, Afp, tmp_t);
+	# PC 22
+	ibr5 := newi(IBNEL);
+	addrsind(ibr5.s, Afp, tmp_t);
+	addrimm(ibr5.m, 0);
+	addrimm(ibr5.d, start_pc + 25);
+	# PC 23
+	iadd5 := newi(IADDL);
+	addrimm(iadd5.s, 2);
+	addrsind(iadd5.m, Afp, tmp_n);
+	addrsind(iadd5.d, Afp, tmp_n);
+	# PC 24
+	ishl5 := newi(ISHLL);
+	addrimm(ishl5.s, 2);
+	addrsind(ishl5.m, Afp, tmp_x);
+	addrsind(ishl5.d, Afp, tmp_x);
+
+	# Step 6: if ((x & 0x8000000000000000) == 0) { n += 1; }
+	# PC 25
+	iand6 := newi(IANDL);
+	addrsind(iand6.s, Afp, tmp_x);
+	addrsind(iand6.m, Amp, mask1off);
+	addrsind(iand6.d, Afp, tmp_t);
+	# PC 26
+	ibr6 := newi(IBNEL);
+	addrsind(ibr6.s, Afp, tmp_t);
+	addrimm(ibr6.m, 0);
+	addrimm(ibr6.d, start_pc + 28);
+	# PC 27
+	iadd6 := newi(IADDL);
+	addrimm(iadd6.s, 1);
+	addrsind(iadd6.m, Afp, tmp_n);
+	addrsind(iadd6.d, Afp, tmp_n);
+
+	# PC 28-30: dst = n (3 NOPs to reach end_pc=31)
+	imov_final := newi(IMOVL);
+	addrsind(imov_final.s, Afp, tmp_n);
+	*imov_final.d = *Wi.dst;
+
+	inop1 := newi(INOP);
+	inop2 := newi(INOP);
+
+	# Release temp registers
+	relreg(imov0.d);
+	relreg(imov_n.d);
+	relreg(iand1.d);
+}
+
+#
+# Translate i64 count trailing zeros.
+# Uses binary search: check bottom half, if 0 then add bits and shift right.
+# ctz(0) = 64, ctz(1) = 0, ctz(0x8000000000000000) = 63
+#
+
+xi64ctz()
+{
+	# Save starting PC for branch target calculation
+	start_pc := pcdis;
+	end_pc := start_pc + 31;
+
+	# Allocate registers
+	tmp_x := getreg(DIS_L);  # working value
+	tmp_n := getreg(DIS_L);  # count
+	tmp_t := getreg(DIS_L);  # temporary for AND result
+
+	# Mask constants in module data (64-bit, low bits)
+	mask32off := mpbig(big 16r00000000FFFFFFFF);
+	mask16off := mpbig(big 16r000000000000FFFF);
+	mask8off := mpbig(big 16r00000000000000FF);
+	mask4off := mpbig(big 16r000000000000000F);
+	mask2off := mpbig(big 16r0000000000000003);
+	mask1off := mpbig(big 16r0000000000000001);
+
+	# PC 0: x = input
+	imov0 := newi(IMOVL);
+	if(Wi.src1pc >= 0)
+		*imov0.s = *wcodes[Wi.src1pc].dst;
+	else
+		*imov0.s = *wsrc(0);
+	addrsind(imov0.d, Afp, tmp_x);
+
+	# PC 1: if x != 0, skip to PC 4
+	ibr_nz := newi(IBNEL);
+	addrsind(ibr_nz.s, Afp, tmp_x);
+	addrimm(ibr_nz.m, 0);
+	addrimm(ibr_nz.d, start_pc + 4);
+
+	# PC 2: dst = 64
+	imov_64 := newi(IMOVL);
+	addrimm(imov_64.s, 64);
+	*imov_64.d = *Wi.dst;
+
+	# PC 3: jump to end
+	ijmp := newi(IJMP);
+	addrimm(ijmp.d, end_pc);
+
+	# PC 4: n = 0
+	imov_n := newi(IMOVL);
+	addrimm(imov_n.s, 0);
+	addrsind(imov_n.d, Afp, tmp_n);
+
+	# Step 1: if ((x & 0x00000000FFFFFFFF) == 0) { n += 32; x >>= 32; }
+	# PC 5
+	iand1 := newi(IANDL);
+	addrsind(iand1.s, Afp, tmp_x);
+	addrsind(iand1.m, Amp, mask32off);
+	addrsind(iand1.d, Afp, tmp_t);
+	# PC 6
+	ibr1 := newi(IBNEL);
+	addrsind(ibr1.s, Afp, tmp_t);
+	addrimm(ibr1.m, 0);
+	addrimm(ibr1.d, start_pc + 9);
+	# PC 7
+	iadd1 := newi(IADDL);
+	addrimm(iadd1.s, 32);
+	addrsind(iadd1.m, Afp, tmp_n);
+	addrsind(iadd1.d, Afp, tmp_n);
+	# PC 8
+	ilsr1 := newi(ILSRL);
+	addrimm(ilsr1.s, 32);
+	addrsind(ilsr1.m, Afp, tmp_x);
+	addrsind(ilsr1.d, Afp, tmp_x);
+
+	# Step 2: if ((x & 0x000000000000FFFF) == 0) { n += 16; x >>= 16; }
+	# PC 9
+	iand2 := newi(IANDL);
+	addrsind(iand2.s, Afp, tmp_x);
+	addrsind(iand2.m, Amp, mask16off);
+	addrsind(iand2.d, Afp, tmp_t);
+	# PC 10
+	ibr2 := newi(IBNEL);
+	addrsind(ibr2.s, Afp, tmp_t);
+	addrimm(ibr2.m, 0);
+	addrimm(ibr2.d, start_pc + 13);
+	# PC 11
+	iadd2 := newi(IADDL);
+	addrimm(iadd2.s, 16);
+	addrsind(iadd2.m, Afp, tmp_n);
+	addrsind(iadd2.d, Afp, tmp_n);
+	# PC 12
+	ilsr2 := newi(ILSRL);
+	addrimm(ilsr2.s, 16);
+	addrsind(ilsr2.m, Afp, tmp_x);
+	addrsind(ilsr2.d, Afp, tmp_x);
+
+	# Step 3: if ((x & 0x00000000000000FF) == 0) { n += 8; x >>= 8; }
+	# PC 13
+	iand3 := newi(IANDL);
+	addrsind(iand3.s, Afp, tmp_x);
+	addrsind(iand3.m, Amp, mask8off);
+	addrsind(iand3.d, Afp, tmp_t);
+	# PC 14
+	ibr3 := newi(IBNEL);
+	addrsind(ibr3.s, Afp, tmp_t);
+	addrimm(ibr3.m, 0);
+	addrimm(ibr3.d, start_pc + 17);
+	# PC 15
+	iadd3 := newi(IADDL);
+	addrimm(iadd3.s, 8);
+	addrsind(iadd3.m, Afp, tmp_n);
+	addrsind(iadd3.d, Afp, tmp_n);
+	# PC 16
+	ilsr3 := newi(ILSRL);
+	addrimm(ilsr3.s, 8);
+	addrsind(ilsr3.m, Afp, tmp_x);
+	addrsind(ilsr3.d, Afp, tmp_x);
+
+	# Step 4: if ((x & 0x000000000000000F) == 0) { n += 4; x >>= 4; }
+	# PC 17
+	iand4 := newi(IANDL);
+	addrsind(iand4.s, Afp, tmp_x);
+	addrsind(iand4.m, Amp, mask4off);
+	addrsind(iand4.d, Afp, tmp_t);
+	# PC 18
+	ibr4 := newi(IBNEL);
+	addrsind(ibr4.s, Afp, tmp_t);
+	addrimm(ibr4.m, 0);
+	addrimm(ibr4.d, start_pc + 21);
+	# PC 19
+	iadd4 := newi(IADDL);
+	addrimm(iadd4.s, 4);
+	addrsind(iadd4.m, Afp, tmp_n);
+	addrsind(iadd4.d, Afp, tmp_n);
+	# PC 20
+	ilsr4 := newi(ILSRL);
+	addrimm(ilsr4.s, 4);
+	addrsind(ilsr4.m, Afp, tmp_x);
+	addrsind(ilsr4.d, Afp, tmp_x);
+
+	# Step 5: if ((x & 0x0000000000000003) == 0) { n += 2; x >>= 2; }
+	# PC 21
+	iand5 := newi(IANDL);
+	addrsind(iand5.s, Afp, tmp_x);
+	addrsind(iand5.m, Amp, mask2off);
+	addrsind(iand5.d, Afp, tmp_t);
+	# PC 22
+	ibr5 := newi(IBNEL);
+	addrsind(ibr5.s, Afp, tmp_t);
+	addrimm(ibr5.m, 0);
+	addrimm(ibr5.d, start_pc + 25);
+	# PC 23
+	iadd5 := newi(IADDL);
+	addrimm(iadd5.s, 2);
+	addrsind(iadd5.m, Afp, tmp_n);
+	addrsind(iadd5.d, Afp, tmp_n);
+	# PC 24
+	ilsr5 := newi(ILSRL);
+	addrimm(ilsr5.s, 2);
+	addrsind(ilsr5.m, Afp, tmp_x);
+	addrsind(ilsr5.d, Afp, tmp_x);
+
+	# Step 6: if ((x & 0x0000000000000001) == 0) { n += 1; }
+	# PC 25
+	iand6 := newi(IANDL);
+	addrsind(iand6.s, Afp, tmp_x);
+	addrsind(iand6.m, Amp, mask1off);
+	addrsind(iand6.d, Afp, tmp_t);
+	# PC 26
+	ibr6 := newi(IBNEL);
+	addrsind(ibr6.s, Afp, tmp_t);
+	addrimm(ibr6.m, 0);
+	addrimm(ibr6.d, start_pc + 28);
+	# PC 27
+	iadd6 := newi(IADDL);
+	addrimm(iadd6.s, 1);
+	addrsind(iadd6.m, Afp, tmp_n);
+	addrsind(iadd6.d, Afp, tmp_n);
+
+	# PC 28-30: dst = n
+	imov_final := newi(IMOVL);
+	addrsind(imov_final.s, Afp, tmp_n);
+	*imov_final.d = *Wi.dst;
+
+	inop1 := newi(INOP);
+	inop2 := newi(INOP);
+
+	# Release temp registers
+	relreg(imov0.d);
+	relreg(imov_n.d);
+	relreg(iand1.d);
+}
+
+#
+# Translate i64 population count (count of 1 bits).
+# Uses parallel bit counting algorithm extended to 64 bits.
+#
+
+xi64popcnt()
+{
+	# Allocate registers
+	tmp_x := getreg(DIS_L);  # working value
+	tmp_t := getreg(DIS_L);  # temporary
+
+	# Mask constants in module data (64-bit)
+	m1off := mpbig(big 16r5555555555555555);  # 0101...
+	m2off := mpbig(big 16r3333333333333333);  # 0011...
+	m4off := mpbig(big 16r0F0F0F0F0F0F0F0F);  # 00001111...
+	m8off := mpbig(big 16r00FF00FF00FF00FF);  # 8-bit groups
+	m16off := mpbig(big 16r0000FFFF0000FFFF); # 16-bit groups
+	m32off := mpbig(big 16r00000000FFFFFFFF); # 32-bit groups
+
+	# x = input
+	imov0 := newi(IMOVL);
+	if(Wi.src1pc >= 0)
+		*imov0.s = *wcodes[Wi.src1pc].dst;
+	else
+		*imov0.s = *wsrc(0);
+	addrsind(imov0.d, Afp, tmp_x);
+
+	# Step 1: x = (x & m1) + ((x >> 1) & m1)
+	# t = x >> 1
+	ilsr1 := newi(ILSRL);
+	addrimm(ilsr1.s, 1);
+	addrsind(ilsr1.m, Afp, tmp_x);
+	addrsind(ilsr1.d, Afp, tmp_t);
+	# t = t & m1
+	iand1t := newi(IANDL);
+	addrsind(iand1t.s, Afp, tmp_t);
+	addrsind(iand1t.m, Amp, m1off);
+	addrsind(iand1t.d, Afp, tmp_t);
+	# x = x & m1
+	iand1x := newi(IANDL);
+	addrsind(iand1x.s, Afp, tmp_x);
+	addrsind(iand1x.m, Amp, m1off);
+	addrsind(iand1x.d, Afp, tmp_x);
+	# x = x + t
+	iadd1 := newi(IADDL);
+	addrsind(iadd1.s, Afp, tmp_t);
+	addrsind(iadd1.m, Afp, tmp_x);
+	addrsind(iadd1.d, Afp, tmp_x);
+
+	# Step 2: x = (x & m2) + ((x >> 2) & m2)
+	ilsr2 := newi(ILSRL);
+	addrimm(ilsr2.s, 2);
+	addrsind(ilsr2.m, Afp, tmp_x);
+	addrsind(ilsr2.d, Afp, tmp_t);
+	iand2t := newi(IANDL);
+	addrsind(iand2t.s, Afp, tmp_t);
+	addrsind(iand2t.m, Amp, m2off);
+	addrsind(iand2t.d, Afp, tmp_t);
+	iand2x := newi(IANDL);
+	addrsind(iand2x.s, Afp, tmp_x);
+	addrsind(iand2x.m, Amp, m2off);
+	addrsind(iand2x.d, Afp, tmp_x);
+	iadd2 := newi(IADDL);
+	addrsind(iadd2.s, Afp, tmp_t);
+	addrsind(iadd2.m, Afp, tmp_x);
+	addrsind(iadd2.d, Afp, tmp_x);
+
+	# Step 3: x = (x & m4) + ((x >> 4) & m4)
+	ilsr3 := newi(ILSRL);
+	addrimm(ilsr3.s, 4);
+	addrsind(ilsr3.m, Afp, tmp_x);
+	addrsind(ilsr3.d, Afp, tmp_t);
+	iand3t := newi(IANDL);
+	addrsind(iand3t.s, Afp, tmp_t);
+	addrsind(iand3t.m, Amp, m4off);
+	addrsind(iand3t.d, Afp, tmp_t);
+	iand3x := newi(IANDL);
+	addrsind(iand3x.s, Afp, tmp_x);
+	addrsind(iand3x.m, Amp, m4off);
+	addrsind(iand3x.d, Afp, tmp_x);
+	iadd3 := newi(IADDL);
+	addrsind(iadd3.s, Afp, tmp_t);
+	addrsind(iadd3.m, Afp, tmp_x);
+	addrsind(iadd3.d, Afp, tmp_x);
+
+	# Step 4: x = (x & m8) + ((x >> 8) & m8)
+	ilsr4 := newi(ILSRL);
+	addrimm(ilsr4.s, 8);
+	addrsind(ilsr4.m, Afp, tmp_x);
+	addrsind(ilsr4.d, Afp, tmp_t);
+	iand4t := newi(IANDL);
+	addrsind(iand4t.s, Afp, tmp_t);
+	addrsind(iand4t.m, Amp, m8off);
+	addrsind(iand4t.d, Afp, tmp_t);
+	iand4x := newi(IANDL);
+	addrsind(iand4x.s, Afp, tmp_x);
+	addrsind(iand4x.m, Amp, m8off);
+	addrsind(iand4x.d, Afp, tmp_x);
+	iadd4 := newi(IADDL);
+	addrsind(iadd4.s, Afp, tmp_t);
+	addrsind(iadd4.m, Afp, tmp_x);
+	addrsind(iadd4.d, Afp, tmp_x);
+
+	# Step 5: x = (x & m16) + ((x >> 16) & m16)
+	ilsr5 := newi(ILSRL);
+	addrimm(ilsr5.s, 16);
+	addrsind(ilsr5.m, Afp, tmp_x);
+	addrsind(ilsr5.d, Afp, tmp_t);
+	iand5t := newi(IANDL);
+	addrsind(iand5t.s, Afp, tmp_t);
+	addrsind(iand5t.m, Amp, m16off);
+	addrsind(iand5t.d, Afp, tmp_t);
+	iand5x := newi(IANDL);
+	addrsind(iand5x.s, Afp, tmp_x);
+	addrsind(iand5x.m, Amp, m16off);
+	addrsind(iand5x.d, Afp, tmp_x);
+	iadd5 := newi(IADDL);
+	addrsind(iadd5.s, Afp, tmp_t);
+	addrsind(iadd5.m, Afp, tmp_x);
+	addrsind(iadd5.d, Afp, tmp_x);
+
+	# Step 6: x = (x & m32) + ((x >> 32) & m32)
+	ilsr6 := newi(ILSRL);
+	addrimm(ilsr6.s, 32);
+	addrsind(ilsr6.m, Afp, tmp_x);
+	addrsind(ilsr6.d, Afp, tmp_t);
+	iand6t := newi(IANDL);
+	addrsind(iand6t.s, Afp, tmp_t);
+	addrsind(iand6t.m, Amp, m32off);
+	addrsind(iand6t.d, Afp, tmp_t);
+	iand6x := newi(IANDL);
+	addrsind(iand6x.s, Afp, tmp_x);
+	addrsind(iand6x.m, Amp, m32off);
+	addrsind(iand6x.d, Afp, tmp_x);
+	iadd6 := newi(IADDL);
+	addrsind(iadd6.s, Afp, tmp_t);
+	addrsind(iadd6.m, Afp, tmp_x);
+	*iadd6.d = *Wi.dst;
+
+	# Release temp registers
+	relreg(imov0.d);
+	relreg(ilsr1.d);
+}
+
+#
 # Translate i64 binary arithmetic operation (commutative).
 #
 
@@ -1778,10 +2310,14 @@ xlatwinst()
 		xi32rotr_simple();
 
 	# i64 unary operations
-	Wi64_clz or Wi64_ctz or Wi64_popcnt =>
-		i = newi(IMOVL);
-		addrimm(i.s, 0);
-		*i.d = *Wi.dst;
+	Wi64_clz =>
+		xi64clz();
+
+	Wi64_ctz =>
+		xi64ctz();
+
+	Wi64_popcnt =>
+		xi64popcnt();
 
 	# i64 binary operations
 	Wi64_add =>

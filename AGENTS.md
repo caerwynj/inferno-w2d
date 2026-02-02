@@ -24,13 +24,13 @@ mk install
 ```
 
 # execute inferno commands
-The Inferno OS shell supports most typical UNIX command line utilities like cat, ls, cd, wc, pwd, uniq, echo. `inferno` should be run in the root folder of the project so that it sees the current working directory mounted on `/n/local`
+To execute Inferno OS shell run `inferno` in the root folder of the project so that mounts the current working directory `/n/local` in the inferno namespace.
 ```
 inferno ls   # run ls inside the inferno VM
 inferno wasm/w2d -m testfile.wasm    # convert wasm to dis. the -m flag generates a .m limbo module.
 ```
 
-# convert a .wasm to .dis assembly
+# convert a .wasm to .s dis assembly
 ```
 inferno wasm/w2d -S testfile.wasm
 ```
@@ -52,3 +52,5 @@ cd test; mk test
 
 # Dis ISA
 Read doc/dis.ms for a description of the Dis VM instruction set architecture.
+Read module/isa.m contains the Dis ISA.
+See $ROOT/appl/cmd/limbo/ for the limbo compiler and more details on how it outputs Dis instructions.
