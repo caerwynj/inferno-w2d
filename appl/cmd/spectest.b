@@ -287,7 +287,25 @@ sanitizename(name: string): string
 		else
 			s[len s] = c;
 	}
+	# Escape Limbo reserved keywords by adding underscore suffix
+	if(iskeyword(s))
+		s += "_";
 	return s;
+}
+
+iskeyword(s: string): int
+{
+	# Limbo reserved keywords that might conflict with WASM function names
+	case s {
+	"adt" or "alt" or "array" or "big" or "break" or "byte" or "case" or "chan" or
+	"con" or "continue" or "cyclic" or "do" or "else" or "exception" or "exit" or
+	"fn" or "for" or "hd" or "if" or "implement" or "import" or "include" or "int" or
+	"len" or "list" or "load" or "module" or "nil" or "of" or "or" or "pick" or
+	"raise" or "real" or "ref" or "return" or "self" or "spawn" or "string" or
+	"tagof" or "tl" or "to" or "type" or "while" or "and" or "xor" =>
+		return 1;
+	}
+	return 0;
 }
 
 # Convert ParsedArg list to Dispatcher Arg list
