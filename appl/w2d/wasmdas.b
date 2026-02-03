@@ -204,6 +204,11 @@ loadobj(wasmfile: string): (ref Mod, string)
 						nhi := getw();
 						if(DEBUG)sys->print("%s 0x%x 0x%x\n", optab[opcode], nhi, nlo);
 						l = ref Winst(opcode, nlo, nhi, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
+					Wmemory_size or Wmemory_grow =>
+						# memory.size and memory.grow have a trailing memory index byte (always 0 in WASM 1.0)
+						memidx := operand();
+						if(DEBUG)sys->print("%s %d\n", optab[opcode], memidx);
+						l = ref Winst(opcode, memidx, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
 					* =>
 						if(DEBUG)sys->print("%s\n", optab[opcode]);
 						l = ref Winst(opcode, -1, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;

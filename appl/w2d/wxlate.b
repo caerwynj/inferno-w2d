@@ -1808,6 +1808,305 @@ xi64eqz()
 }
 
 #
+# Memory load helper - loads nbytes from memory at address into Wi.dst.
+# signed indicates whether to sign-extend the result.
+# dtype is DIS_W for i32/f32 or DIS_L for i64/f64.
+#
+xmemload(nbytes: int, signed: int, dtype: byte)
+{
+	# Get address from source operand and add static offset
+	# Wi.src1pc has the PC of instruction that produced the address
+	# Wi.arg2 has the static offset from the load instruction
+
+	# Allocate temporaries
+	tmp_memptr := getreg(DIS_P);  # memory array pointer
+	tmp_idx := getreg(DIS_W);     # byte index for iteration
+	tmp_baddr := getreg(DIS_W);   # byte address pointer (from indb)
+	tmp_byte := getreg(DIS_W);    # single byte value
+
+	# Copy source address to tmp_idx FIRST before any other getreg calls
+	# This ensures we don't overwrite the source operand
+	imova := newi(IMOVW);
+	if(Wi.src1pc >= 0)
+		*imova.s = *wcodes[Wi.src1pc].dst;
+	else
+		*imova.s = *wsrc(0);
+	addrsind(imova.d, Afp, tmp_idx);
+
+	# Add static offset if non-zero
+	if(Wi.arg2 != 0) {
+		off := mpword(Wi.arg2);
+		iadd := newi(IADDW);
+		addrsind(iadd.s, Afp, tmp_idx);
+		addrsind(iadd.m, Amp, off);
+		addrsind(iadd.d, Afp, tmp_idx);
+	}
+
+	# Load memory pointer from module data: movp WMEM_PTR(mp), tmp_memptr
+	imovp := newi(IMOVP);
+	addrsind(imovp.s, Amp, WMEM_PTR);
+	addrsind(imovp.d, Afp, tmp_memptr);
+
+	# Initialize result to 0
+	if(dtype == DIS_L) {
+		izero := newi(IMOVL);
+		addrimm(izero.s, 0);
+		*izero.d = *Wi.dst;
+	} else {
+		izero := newi(IMOVW);
+		addrimm(izero.s, 0);
+		*izero.d = *Wi.dst;
+	}
+
+	# Load bytes in little-endian order (byte 0 is LSB)
+	for(b := 0; b < nbytes; b++) {
+		# Calculate byte index: addr + b
+		# indb syntax: indb array, dst, index
+		# where s=array, m=dst (result address), d=index
+		if(b == 0) {
+			# First byte, addr is already in tmp_idx
+			iindb := newi(IINDB);
+			addrsind(iindb.s, Afp, tmp_memptr);   # array
+			addrsind(iindb.m, Afp, tmp_baddr);    # result address
+			addrsind(iindb.d, Afp, tmp_idx);      # index
+		} else {
+			# Subsequent bytes: increment address
+			iinc := newi(IADDW);
+			addrimm(iinc.s, 1);
+			addrsind(iinc.m, Afp, tmp_idx);
+			addrsind(iinc.d, Afp, tmp_idx);
+
+			iindb := newi(IINDB);
+			addrsind(iindb.s, Afp, tmp_memptr);   # array
+			addrsind(iindb.m, Afp, tmp_baddr);    # result address
+			addrsind(iindb.d, Afp, tmp_idx);      # index
+		}
+
+		# Load byte: movb 0(tmp_baddr), tmp_byte
+		imovb := newi(IMOVB);
+		addrdind(imovb.s, Afpind, tmp_baddr, 0);
+		addrsind(imovb.d, Afp, tmp_byte);
+
+		# Extend byte to word: cvtbw
+		icvt := newi(ICVTBW);
+		addrsind(icvt.s, Afp, tmp_byte);
+		addrsind(icvt.d, Afp, tmp_byte);
+
+		# Shift byte to correct position: byte << (b * 8)
+		if(b > 0) {
+			ishl := newi(ISHLW);
+			addrimm(ishl.s, b * 8);
+			addrsind(ishl.m, Afp, tmp_byte);
+			addrsind(ishl.d, Afp, tmp_byte);
+		}
+
+		# OR into result
+		if(dtype == DIS_L) {
+			# For 64-bit, extend byte to big first
+			icvtl := newi(ICVTWL);
+			addrsind(icvtl.s, Afp, tmp_byte);
+			addrsind(icvtl.d, Afp, tmp_byte);
+
+			ior := newi(IORL);
+			addrsind(ior.s, Afp, tmp_byte);
+			*ior.m = *Wi.dst;
+			*ior.d = *Wi.dst;
+		} else {
+			ior := newi(IORW);
+			addrsind(ior.s, Afp, tmp_byte);
+			*ior.m = *Wi.dst;
+			*ior.d = *Wi.dst;
+		}
+	}
+
+	# Sign extension if needed
+	if(signed) {
+		# Check if high bit of loaded value is set
+		# For nbytes=1: bit 7 (mask 0x80)
+		# For nbytes=2: bit 15 (mask 0x8000)
+		# For nbytes=4: bit 31 (mask 0x80000000)
+		signbit := 1 << (nbytes * 8 - 1);
+		signmask: big;
+		case nbytes {
+		1 =>
+			if(dtype == DIS_L)
+				signmask = big 16rFFFFFFFFFFFFFF00;
+			else
+				signmask = big 16rFFFFFF00;
+		2 =>
+			if(dtype == DIS_L)
+				signmask = big 16rFFFFFFFFFFFF0000;
+			else
+				signmask = big 16rFFFF0000;
+		4 =>
+			signmask = big 16rFFFFFFFF00000000;
+		}
+
+		# Test sign bit: and dst, signbit, tmp
+		signoff := mpword(signbit);
+		iand := newi(IANDW);
+		*iand.s = *Wi.dst;
+		addrsind(iand.m, Amp, signoff);
+		addrsind(iand.d, Afp, tmp_byte);
+
+		# Branch if zero (no sign extension needed)
+		ibr := newi(IBEQW);
+		addrsind(ibr.s, Afp, tmp_byte);
+		addrimm(ibr.m, 0);
+		addrimm(ibr.d, pcdis + 2);  # skip next instruction
+
+		# OR with sign extension mask
+		maskoff := mpbig(signmask);
+		if(dtype == DIS_L) {
+			ior := newi(IORL);
+			addrsind(ior.s, Amp, maskoff);
+			*ior.m = *Wi.dst;
+			*ior.d = *Wi.dst;
+		} else {
+			ior := newi(IORW);
+			addrsind(ior.s, Amp, maskoff);
+			*ior.m = *Wi.dst;
+			*ior.d = *Wi.dst;
+		}
+	}
+
+	# Release temporaries
+	relreg(ref Addr(Afp, 0, tmp_memptr));
+	relreg(ref Addr(Afp, 0, tmp_idx));
+	relreg(ref Addr(Afp, 0, tmp_baddr));
+	relreg(ref Addr(Afp, 0, tmp_byte));
+}
+
+#
+# Memory store helper - stores nbytes to memory at address from value.
+# dtype is DIS_W for i32/f32 or DIS_L for i64/f64.
+#
+xmemstore(nbytes: int, dtype: byte)
+{
+	# Wi.src1pc has address, Wi.src2pc has value
+	# Wi.arg2 has the static offset
+
+	# Allocate temporaries
+	tmp_memptr := getreg(DIS_P);  # memory array pointer
+	tmp_addr := getreg(DIS_W);    # effective address (copy of runtime addr)
+	tmp_baddr := getreg(DIS_W);   # byte address pointer (from indb)
+	tmp_byte := getreg(DIS_W);    # single byte value
+	tmp_val := getreg(dtype);     # value to store (working copy)
+
+	# IMPORTANT: Copy both source operands to temps FIRST before any computation
+	# This prevents getreg from returning registers that are still in use by sources
+
+	# Copy value to working register first (value might be in a temp that will be reused)
+	if(dtype == DIS_L) {
+		imov := newi(IMOVL);
+		if(Wi.src2pc >= 0)
+			*imov.s = *wcodes[Wi.src2pc].dst;
+		else
+			*imov.s = *wsrc(0);
+		addrsind(imov.d, Afp, tmp_val);
+	} else {
+		imov := newi(IMOVW);
+		if(Wi.src2pc >= 0)
+			*imov.s = *wcodes[Wi.src2pc].dst;
+		else
+			*imov.s = *wsrc(0);
+		addrsind(imov.d, Afp, tmp_val);
+	}
+
+	# Copy address to tmp_addr (address might overlap with value's register after simulation)
+	imova := newi(IMOVW);
+	if(Wi.src1pc >= 0)
+		*imova.s = *wcodes[Wi.src1pc].dst;
+	else
+		*imova.s = *wsrc(1);  # address is second from top (below value)
+	addrsind(imova.d, Afp, tmp_addr);
+
+	# Add static offset to address if non-zero
+	if(Wi.arg2 != 0) {
+		off := mpword(Wi.arg2);
+		iadd := newi(IADDW);
+		addrsind(iadd.s, Afp, tmp_addr);
+		addrsind(iadd.m, Amp, off);
+		addrsind(iadd.d, Afp, tmp_addr);
+	}
+
+	# Load memory pointer from module data
+	imovp := newi(IMOVP);
+	addrsind(imovp.s, Amp, WMEM_PTR);
+	addrsind(imovp.d, Afp, tmp_memptr);
+
+	# Store bytes in little-endian order
+	# indb syntax: indb array, dst, index
+	# where s=array, m=dst (result address), d=index
+	for(b := 0; b < nbytes; b++) {
+		# Get index into array: addr + b
+		if(b == 0) {
+			iindb := newi(IINDB);
+			addrsind(iindb.s, Afp, tmp_memptr);   # array
+			addrsind(iindb.m, Afp, tmp_baddr);    # result address
+			addrsind(iindb.d, Afp, tmp_addr);     # index
+		} else {
+			# Increment address
+			iinc := newi(IADDW);
+			addrimm(iinc.s, 1);
+			addrsind(iinc.m, Afp, tmp_addr);
+			addrsind(iinc.d, Afp, tmp_addr);
+
+			iindb := newi(IINDB);
+			addrsind(iindb.s, Afp, tmp_memptr);   # array
+			addrsind(iindb.m, Afp, tmp_baddr);    # result address
+			addrsind(iindb.d, Afp, tmp_addr);     # index
+		}
+
+		# Extract low byte: and val, 0xFF, tmp_byte
+		maskoff := mpword(16rFF);
+		if(dtype == DIS_L) {
+			iand := newi(IANDL);
+			addrsind(iand.s, Afp, tmp_val);
+			addrsind(iand.m, Amp, maskoff);
+			addrsind(iand.d, Afp, tmp_byte);
+		} else {
+			iand := newi(IANDW);
+			addrsind(iand.s, Afp, tmp_val);
+			addrsind(iand.m, Amp, maskoff);
+			addrsind(iand.d, Afp, tmp_byte);
+		}
+
+		# Convert to byte
+		icvt := newi(ICVTWB);
+		addrsind(icvt.s, Afp, tmp_byte);
+		addrsind(icvt.d, Afp, tmp_byte);
+
+		# Store byte: movb tmp_byte, 0(tmp_baddr)
+		imovb := newi(IMOVB);
+		addrsind(imovb.s, Afp, tmp_byte);
+		addrdind(imovb.d, Afpind, tmp_baddr, 0);
+
+		# Shift value right by 8 for next byte
+		if(b < nbytes - 1) {
+			if(dtype == DIS_L) {
+				ishr := newi(ILSRL);
+				addrimm(ishr.s, 8);
+				addrsind(ishr.m, Afp, tmp_val);
+				addrsind(ishr.d, Afp, tmp_val);
+			} else {
+				ishr := newi(ILSRW);
+				addrimm(ishr.s, 8);
+				addrsind(ishr.m, Afp, tmp_val);
+				addrsind(ishr.d, Afp, tmp_val);
+			}
+		}
+	}
+
+	# Release temporaries
+	relreg(ref Addr(Afp, 0, tmp_memptr));
+	relreg(ref Addr(Afp, 0, tmp_addr));
+	relreg(ref Addr(Afp, 0, tmp_baddr));
+	relreg(ref Addr(Afp, 0, tmp_byte));
+	relreg(ref Addr(Afp, 0, tmp_val));
+}
+
+#
 # Translate a single WASM instruction to Dis.
 #
 
@@ -2068,45 +2367,78 @@ xlatwinst()
 
 	# memory instructions - loads
 	Wi32_load =>
-		# Load 32-bit value from memory
-		# TODO: Implement proper linear memory support
-		# For now, return 0 (WASM memory is zero-initialized)
-		i = newi(IMOVW);
-		addrimm(i.s, 0);
-		*i.d = *Wi.dst;
+		xmemload(4, 0, DIS_W);
 
-	Wi32_load8_s or Wi32_load8_u =>
-		# TODO: Implement proper linear memory support
-		i = newi(IMOVW);
-		addrimm(i.s, 0);
-		*i.d = *Wi.dst;
+	Wi32_load8_s =>
+		xmemload(1, 1, DIS_W);
 
-	Wi32_load16_s or Wi32_load16_u =>
-		# TODO: Implement proper linear memory support
-		i = newi(IMOVW);
-		addrimm(i.s, 0);
-		*i.d = *Wi.dst;
+	Wi32_load8_u =>
+		xmemload(1, 0, DIS_W);
+
+	Wi32_load16_s =>
+		xmemload(2, 1, DIS_W);
+
+	Wi32_load16_u =>
+		xmemload(2, 0, DIS_W);
 
 	Wi64_load =>
-		# TODO: Implement proper linear memory support
-		i = newi(IMOVL);
-		addrimm(i.s, 0);
-		*i.d = *Wi.dst;
+		xmemload(8, 0, DIS_L);
 
-	Wf32_load or Wf64_load =>
-		# TODO: Implement proper linear memory support
-		# Return 0.0 (allocated in module data)
-		off := mpreal(0.0);
-		i = newi(IMOVF);
-		addrsind(i.s, Amp, off);
-		*i.d = *Wi.dst;
+	Wi64_load8_s =>
+		xmemload(1, 1, DIS_L);
+
+	Wi64_load8_u =>
+		xmemload(1, 0, DIS_L);
+
+	Wi64_load16_s =>
+		xmemload(2, 1, DIS_L);
+
+	Wi64_load16_u =>
+		xmemload(2, 0, DIS_L);
+
+	Wi64_load32_s =>
+		xmemload(4, 1, DIS_L);
+
+	Wi64_load32_u =>
+		xmemload(4, 0, DIS_L);
+
+	Wf32_load =>
+		# Load 4 bytes as i32, then reinterpret as float
+		xmemload(4, 0, DIS_W);
+
+	Wf64_load =>
+		# Load 8 bytes as i64, then reinterpret as float
+		xmemload(8, 0, DIS_L);
 
 	# memory instructions - stores
-	# TODO: Implement proper linear memory support
-	Wi32_store or Wi32_store8 or Wi32_store16 or
-	Wi64_store or Wi64_store8 or Wi64_store16 or Wi64_store32 or
-	Wf32_store or Wf64_store =>
-		;  # No-op for now - stores to memory are ignored (no instruction generated)
+	Wi32_store =>
+		xmemstore(4, DIS_W);
+
+	Wi32_store8 =>
+		xmemstore(1, DIS_W);
+
+	Wi32_store16 =>
+		xmemstore(2, DIS_W);
+
+	Wi64_store =>
+		xmemstore(8, DIS_L);
+
+	Wi64_store8 =>
+		xmemstore(1, DIS_L);
+
+	Wi64_store16 =>
+		xmemstore(2, DIS_L);
+
+	Wi64_store32 =>
+		xmemstore(4, DIS_L);
+
+	Wf32_store =>
+		# Store float bits as 4 bytes
+		xmemstore(4, DIS_W);
+
+	Wf64_store =>
+		# Store float bits as 8 bytes
+		xmemstore(8, DIS_L);
 
 	# numeric instructions - constants
 	Wi32_const =>
@@ -2500,10 +2832,41 @@ xlatwinst()
 		*i.s = *wsrc(0);
 		*i.d = *Wi.dst;
 
-	Wmemory_size or Wmemory_grow =>
-		# Placeholder - need runtime support
+	Wmemory_size =>
+		# Return memory size in pages (64KB each)
+		# lena memptr, tmp; lsrw $16, tmp, dst
+		tmp_memptr := getreg(DIS_P);
+		tmp_len := getreg(DIS_W);
+
+		# Load memory pointer
+		imovp := newi(IMOVP);
+		addrsind(imovp.s, Amp, WMEM_PTR);
+		addrsind(imovp.d, Afp, tmp_memptr);
+
+		# Get array length
+		ilena := newi(ILENA);
+		addrsind(ilena.s, Afp, tmp_memptr);
+		addrsind(ilena.d, Afp, tmp_len);
+
+		# Divide by 65536 (shift right 16)
+		ishr := newi(ILSRW);
+		addrimm(ishr.s, 16);
+		addrsind(ishr.m, Afp, tmp_len);
+		*ishr.d = *Wi.dst;
+
+		relreg(ref Addr(Afp, 0, tmp_memptr));
+		relreg(ref Addr(Afp, 0, tmp_len));
+
+	Wmemory_grow =>
+		# memory.grow is not fully implemented - return -1 to indicate failure
+		# A full implementation would:
+		# 1. Get current size
+		# 2. Allocate new larger array
+		# 3. Copy old contents to new array
+		# 4. Update WMEM_PTR
+		# 5. Return old page count
 		i = newi(IMOVW);
-		addrimm(i.s, 0);
+		addrimm(i.s, -1);
 		*i.d = *Wi.dst;
 
 	* =>
@@ -2779,12 +3142,17 @@ genmeminit(m: ref Mod)
 	initpc := pcdis;
 
 	# newa  count, typedesc, dst
-	# Allocate byte array: newa $count, $typedesc, temp
-	# Use a very small allocation for testing
-	memsize := 64;  # WMEM_PAGES * 65536;
-	temp := getreg(DIS_W);
+	# Allocate byte array: newaz $count, $typedesc, temp
+	# Use NEWAZ instead of NEWA to ensure zero-initialization
+	# (NEWA leaves non-pointer values undefined, NEWAZ zeroes them)
+	# Get memory size from memory section (in pages, 64KB each)
+	memsize := m.memorysection.memories[0].min * 65536;
+	if(memsize == 0)
+		memsize = 65536;  # default to 1 page if min is 0
+	WMEM_PAGES = m.memorysection.memories[0].min;
+	temp := getreg(DIS_P);
 
-	inewa := newi(INEWA);
+	inewa := newi(INEWAZ);
 	addrimm(inewa.s, memsize);
 	addrimm(inewa.m, WMEM_DESC);
 	addrsind(inewa.d, Afp, temp);
@@ -2844,11 +3212,18 @@ wxlate(m: ref Mod)
 	mpoff = 0;
 	mpconsts = nil;
 
-	# Check for memory section (for future proper implementation)
+	# Check for memory section and reserve space for memory pointer
 	hasmemory = 0;
-	if(m.memorysection != nil && len m.memorysection.memories > 0)
+	if(m.memorysection != nil && len m.memorysection.memories > 0) {
 		hasmemory = 1;
-	# NOTE: Not generating init function - using stub memory implementation
+		# Reserve space for WMEM_PTR (pointer to memory array) at offset 0
+		# WMEM_PTR is already con 0, so mpoff starts after it
+		mpoff = IBY2WD;  # pointer size
+	}
+
+	# Generate memory init function if module has memory
+	if(hasmemory)
+		genmeminit(m);
 
 	# Initialize function call support
 	wmod = m;
@@ -2924,7 +3299,10 @@ wxlate(m: ref Mod)
 	mpoff = align(mpoff, IBY2LG);
 	maplen := mpoff / (8*IBY2WD) + (mpoff % (8*IBY2WD) != 0);
 	mpmap := array[maplen] of { * => byte 0 };
-	# NOTE: Not marking memory pointer - using stub implementation
+	# Mark WMEM_PTR as a pointer in the map (offset 0, first word)
+	# The map bit vector has MSB = lowest address
+	if(hasmemory && maplen > 0)
+		mpmap[0] |= byte 16r80;  # bit 7 = word at offset 0
 	mpdescid(mpoff, maplen, mpmap);
 
 	# Set first function as entry point if no main was found

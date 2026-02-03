@@ -383,6 +383,7 @@ simwinst(pc: int)
 	# memory instructions - load
 	Wi32_load or Wi32_load8_s or Wi32_load8_u or Wi32_load16_s or Wi32_load16_u =>
 		r = wpop();  # address
+		Wi.src1pc = r.pc;  # record address source
 		wreldst(r.pc);
 		wallocdst(pc, I32);
 		wpush(ref WResult(I32, pc));
@@ -390,18 +391,21 @@ simwinst(pc: int)
 	Wi64_load or Wi64_load8_s or Wi64_load8_u or Wi64_load16_s or Wi64_load16_u or
 	Wi64_load32_s or Wi64_load32_u =>
 		r = wpop();  # address
+		Wi.src1pc = r.pc;  # record address source
 		wreldst(r.pc);
 		wallocdst(pc, I64);
 		wpush(ref WResult(I64, pc));
 
 	Wf32_load =>
 		r = wpop();  # address
+		Wi.src1pc = r.pc;  # record address source
 		wreldst(r.pc);
 		wallocdst(pc, F32);
 		wpush(ref WResult(F32, pc));
 
 	Wf64_load =>
 		r = wpop();  # address
+		Wi.src1pc = r.pc;  # record address source
 		wreldst(r.pc);
 		wallocdst(pc, F64);
 		wpush(ref WResult(F64, pc));
@@ -410,24 +414,32 @@ simwinst(pc: int)
 	Wi32_store or Wi32_store8 or Wi32_store16 =>
 		r2 = wpop();  # value
 		r1 = wpop();  # address
+		Wi.src1pc = r1.pc;  # address
+		Wi.src2pc = r2.pc;  # value
 		wreldst(r2.pc);
 		wreldst(r1.pc);
 
 	Wi64_store or Wi64_store8 or Wi64_store16 or Wi64_store32 =>
 		r2 = wpop();  # value
 		r1 = wpop();  # address
+		Wi.src1pc = r1.pc;  # address
+		Wi.src2pc = r2.pc;  # value
 		wreldst(r2.pc);
 		wreldst(r1.pc);
 
 	Wf32_store =>
 		r2 = wpop();  # value
 		r1 = wpop();  # address
+		Wi.src1pc = r1.pc;  # address
+		Wi.src2pc = r2.pc;  # value
 		wreldst(r2.pc);
 		wreldst(r1.pc);
 
 	Wf64_store =>
 		r2 = wpop();  # value
 		r1 = wpop();  # address
+		Wi.src1pc = r1.pc;  # address
+		Wi.src2pc = r2.pc;  # value
 		wreldst(r2.pc);
 		wreldst(r1.pc);
 
