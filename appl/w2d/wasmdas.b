@@ -253,6 +253,49 @@ loadobj(wasmfile: string): (ref Mod, string)
 				m.memorysection.memories[i++] = ref Memory(min, max);
 				vlen--;
 			}
+		SDATA =>
+			m.datasection = ref DataSection;
+			m.datasection.size = slen;
+			vlen := operand();
+			m.datasection.segments = array[vlen] of ref DataSegment;
+			i := 0;
+			while (vlen > 0) {
+				flags := operand();  # 0=active mem0, 1=passive, 2=active with memidx
+				memidx := 0;
+				offset := 0;
+				case flags {
+				0 =>
+					# Active segment for memory 0
+					# Offset is a constant expression: i32.const <offset> end
+					opcode := getb();
+					if(opcode == Wi32_const)
+						offset = soperand();
+					endop := getb();  # should be 0x0b (end)
+					if(DEBUG && endop != 16r0b)
+						sys->print("DATA: expected end opcode, got 0x%x\n", endop);
+				1 =>
+					# Passive segment (no memory, no offset)
+					# Data is used with memory.init instruction
+					memidx = -1;  # mark as passive
+				2 =>
+					# Active segment with explicit memory index
+					memidx = operand();
+					opcode := getb();
+					if(opcode == Wi32_const)
+						offset = soperand();
+					endop := getb();  # should be 0x0b (end)
+					if(DEBUG && endop != 16r0b)
+						sys->print("DATA: expected end opcode, got 0x%x\n", endop);
+				}
+				# Read data bytes
+				datalen := operand();
+				data := array[datalen] of byte;
+				for(j := 0; j < datalen; j++)
+					data[j] = byte getb();
+				if(DEBUG)sys->print("DATA: flags=%d memidx=%d offset=%d len=%d\n", flags, memidx, offset, datalen);
+				m.datasection.segments[i++] = ref DataSegment(memidx, offset, data);
+				vlen--;
+			}
 		* =>
 			wasmptr += slen;
 		}

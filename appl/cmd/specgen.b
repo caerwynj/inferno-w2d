@@ -212,7 +212,11 @@ genDispatch(m: ref Mod, basename: string, outfile: string)
 	# Write WASM module interface
 	sys->fprint(fd, "# WASM module interface\n");
 	sys->fprint(fd, "%s: module {\n", wasmmodname);
-	# NOTE: Not generating init - using stub memory implementation
+
+	# Add init if module has memory (w2d generates init for memory setup)
+	hasmem := m.memorysection != nil && len m.memorysection.memories > 0;
+	if(hasmem)
+		sys->fprint(fd, "\tinit: fn();\n");
 
 	if(m.exportsection != nil) {
 		for(i := 0; i < len m.exportsection.exports; i++) {
@@ -245,6 +249,8 @@ genDispatch(m: ref Mod, basename: string, outfile: string)
 	sys->fprint(fd, "\twmod = load %s path;\n", wasmmodname);
 	sys->fprint(fd, "\tif(wmod == nil)\n");
 	sys->fprint(fd, "\t\treturn sys->sprint(\"%%r\");\n");
+	if(hasmem)
+		sys->fprint(fd, "\twmod->init();\n");
 	sys->fprint(fd, "\treturn nil;\n");
 	sys->fprint(fd, "}\n\n");
 

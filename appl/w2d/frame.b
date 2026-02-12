@@ -311,13 +311,18 @@ wcloseframe(): int
 }
 
 #
-# Calculate the type descriptor for a WASM frame (no pointers).
+# Calculate the type descriptor for a WASM frame.
+# Mark DIS_P temporary slots as pointers for the garbage collector.
 #
 
 wframedesc(): int
 {
 	ln := frameoff / (8*IBY2WD) + (frameoff % (8*IBY2WD) != 0);
 	map := array [ln] of { * => byte 0 };
-	# WASM doesn't have pointer types, so no bits to set
+	# Scan temporary registers for pointer types
+	for(i := 0; i < tmpssz && i < frameoff - tmpslwm; i += IBY2WD) {
+		if(tmps[i].dtype == DIS_P)
+			setbit(map, tmpslwm + i);
+	}
 	return descid(frameoff, ln, map);
 }

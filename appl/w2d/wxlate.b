@@ -1818,10 +1818,23 @@ xmemload(nbytes: int, signed: int, dtype: byte)
 	# Wi.src1pc has the PC of instruction that produced the address
 	# Wi.arg2 has the static offset from the load instruction
 
+	# Protect all WASM stack registers from being reused by getreg.
+	# The simulation phase runs all instructions ahead of code generation,
+	# so registers for values still on the stack may have refcnt=0 (freed
+	# by later instructions like br_if or select). Bump refcnts of all
+	# previously-used temp slots to prevent overlap with our temporaries.
+	saved_tmpssz := tmpssz;
+	saved_refcnts := array[saved_tmpssz] of int;
+	for(si := 0; si < saved_tmpssz; si += IBY2WD) {
+		saved_refcnts[si] = tmps[si].refcnt;
+		if(tmps[si].dtype != DIS_X && tmps[si].refcnt == 0)
+			tmps[si].refcnt = 1;
+	}
+
 	# Allocate temporaries
 	tmp_memptr := getreg(DIS_P);  # memory array pointer
 	tmp_idx := getreg(DIS_W);     # byte index for iteration
-	tmp_baddr := getreg(DIS_W);   # byte address pointer (from indb)
+	tmp_baddr := getreg(DIS_W);   # byte address (interior pointer from indb, not GC-traced)
 	tmp_byte := getreg(DIS_W);    # single byte value
 
 	# Copy source address to tmp_idx FIRST before any other getreg calls
@@ -1953,7 +1966,7 @@ xmemload(nbytes: int, signed: int, dtype: byte)
 		ibr := newi(IBEQW);
 		addrsind(ibr.s, Afp, tmp_byte);
 		addrimm(ibr.m, 0);
-		addrimm(ibr.d, pcdis + 2);  # skip next instruction
+		addrimm(ibr.d, pcdis + 1);  # skip next instruction (the sign ext OR)
 
 		# OR with sign extension mask
 		maskoff := mpbig(signmask);
@@ -1975,6 +1988,10 @@ xmemload(nbytes: int, signed: int, dtype: byte)
 	relreg(ref Addr(Afp, 0, tmp_idx));
 	relreg(ref Addr(Afp, 0, tmp_baddr));
 	relreg(ref Addr(Afp, 0, tmp_byte));
+
+	# Restore saved refcnts
+	for(si = 0; si < saved_tmpssz; si += IBY2WD)
+		tmps[si].refcnt = saved_refcnts[si];
 }
 
 #
@@ -1989,7 +2006,7 @@ xmemstore(nbytes: int, dtype: byte)
 	# Allocate temporaries
 	tmp_memptr := getreg(DIS_P);  # memory array pointer
 	tmp_addr := getreg(DIS_W);    # effective address (copy of runtime addr)
-	tmp_baddr := getreg(DIS_W);   # byte address pointer (from indb)
+	tmp_baddr := getreg(DIS_W);   # byte address (interior pointer from indb, not GC-traced)
 	tmp_byte := getreg(DIS_W);    # single byte value
 	tmp_val := getreg(dtype);     # value to store (working copy)
 
@@ -2246,7 +2263,10 @@ xlatwinst()
 				i = newi(INOP);
 			} else {
 				# Allocate temp register to hold frame pointer
-				frametemp := getreg(DIS_P);
+				# Use DIS_W (not DIS_P) - the Dis VM tracks frames internally
+				# via the frame instruction. Marking this as DIS_P would cause
+				# the GC to trace a dangling pointer after the call returns.
+				frametemp := getreg(DIS_W);
 
 				# Generate frame instruction: frame $tid, temp(fp)
 				iframe := newi(IFRAME);
@@ -2997,6 +3017,7 @@ WMEM_PTR: con 0;  # Module data offset for memory array pointer
 WMEM_PAGES: int;  # Number of 64KB pages
 WMEM_DESC: int;   # Type descriptor ID for memory byte array element
 hasmemory: int;   # Whether module has memory
+wmeminittid: int; # Type descriptor ID for init function frame
 
 #
 # Module data for constants (floats and large integers)
@@ -3125,7 +3146,8 @@ wdisout()
 
 #
 # Generate memory initialization function.
-# This allocates a byte array for WASM linear memory.
+# This allocates a byte array for WASM linear memory and initializes it
+# with data from the data section.
 #
 genmeminit(m: ref Mod)
 {
@@ -3162,6 +3184,42 @@ genmeminit(m: ref Mod)
 	addrsind(imov.s, Afp, temp);
 	addrsind(imov.d, Amp, WMEM_PTR);
 
+	# Initialize memory with data section contents
+	if(m.datasection != nil) {
+		for(i := 0; i < len m.datasection.segments; i++) {
+			seg := m.datasection.segments[i];
+			if(seg.memidx < 0)  # skip passive segments
+				continue;
+			if(len seg.data == 0)  # skip empty segments
+				continue;
+
+			# For each byte in the data segment, store it to memory
+			# We generate: movb $byte, offset(temp(fp))
+			# Using indb to get pointer to element, then movb to store
+
+			tmp_ptr := getreg(DIS_W);      # byte address (interior pointer from indb, not GC-traced)
+
+			for(j := 0; j < len seg.data; j++) {
+				byteoff := seg.offset + j;
+				byteval := int seg.data[j];
+
+				# Get pointer to element: indb temp, tmp_ptr, $byteoff
+				# Use immediate index instead of register
+				iindb := newi(IINDB);
+				addrsind(iindb.s, Afp, temp);
+				addrsind(iindb.m, Afp, tmp_ptr);
+				addrimm(iindb.d, byteoff);
+
+				# Store byte: movb $byte, 0(tmp_ptr(fp))
+				imovb := newi(IMOVB);
+				addrimm(imovb.s, byteval);
+				addrdind(imovb.d, Afpind, tmp_ptr, 0);
+			}
+
+			relreg(ref Addr(Afp, 0, tmp_ptr));
+		}
+	}
+
 	# Return
 	iret := newi(IRET);
 	iret = iret;
@@ -3173,13 +3231,13 @@ genmeminit(m: ref Mod)
 	if(frameoff > maxframe)
 		maxframe = frameoff;
 
-	# Create frame descriptor for init (no pointers in frame)
-	ln := frameoff / (8*IBY2WD) + (frameoff % (8*IBY2WD) != 0);
-	initmap := array [ln] of { * => byte 0 };
-	inittid := descid(frameoff, ln, initmap);
+	# Create frame descriptor for init (marks pointer temporaries)
+	inittid := wframedesc();
 
-	# Link init function
+	# Link init function and set as module entry point
+	wmeminittid = inittid;
 	xtrnlink(inittid, initpc, wfuncsig(ref FuncType(array[0] of int, array[0] of int)), "init", "");
+	setentry(initpc, inittid);
 
 	# Reset frame state for subsequent functions
 	frameoff = 0;
@@ -3305,7 +3363,4 @@ wxlate(m: ref Mod)
 		mpmap[0] |= byte 16r80;  # bit 7 = word at offset 0
 	mpdescid(mpoff, maplen, mpmap);
 
-	# Set first function as entry point if no main was found
-	if(pc == -1 && nlinks > 0)
-		setentry(0, 0);
 }

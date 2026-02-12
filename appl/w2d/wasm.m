@@ -134,6 +134,18 @@ MemorySection: adt {
 	memories: array of ref Memory;
 };
 
+# Data segment for initializing linear memory
+DataSegment: adt {
+	memidx: int;		# memory index (usually 0)
+	offset: int;		# byte offset in memory
+	data: array of byte;	# bytes to copy
+};
+
+DataSection: adt {
+	size: int;
+	segments: array of ref DataSegment;
+};
+
 Mod: adt
 {
 	magic:  	int;
@@ -145,4 +157,5 @@ Mod: adt
 	codesection: ref CodeSection;
 	exportsection: ref ExportSection;
 	memorysection: ref MemorySection;
+	datasection: ref DataSection;
 };
