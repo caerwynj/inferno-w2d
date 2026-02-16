@@ -373,8 +373,11 @@ simwinst(pc: int)
 		# no dst allocation needed, value stays on stack
 
 	Wglobal_get =>
-		wallocdst(pc, I32);  # assume i32 for now
-		wpush(ref WResult(I32, pc));
+		gtype := I32;
+		if(wmod.globalsection != nil && Wi.arg1 < len wmod.globalsection.globals)
+			gtype = wmod.globalsection.globals[Wi.arg1].valtype;
+		wallocdst(pc, gtype);
+		wpush(ref WResult(gtype, pc));
 
 	Wglobal_set =>
 		r = wpop();

@@ -2375,15 +2375,16 @@ xlatwinst()
 		addrsind(i.d, Afp, wlocaloffset(Wi.arg1));
 
 	Wglobal_get =>
-		# Globals would need module data support
-		# For now, generate placeholder
-		i = newi(IMOVW);
-		addrimm(i.s, 0);
+		gidx := Wi.arg1;
+		i = newi(wmovinst(wglobaltypes[gidx]));
+		addrsind(i.s, Amp, wglobaloffs[gidx]);
 		*i.d = *Wi.dst;
 
 	Wglobal_set =>
-		# Placeholder for global set
-		;
+		gidx := Wi.arg1;
+		i = newi(wmovinst(wglobaltypes[gidx]));
+		*i.s = *wsrc(0);
+		addrsind(i.d, Amp, wglobaloffs[gidx]);
 
 	# memory instructions - loads
 	Wi32_load =>
@@ -3020,6 +3021,12 @@ hasmemory: int;   # Whether module has memory
 wmeminittid: int; # Type descriptor ID for init function frame
 
 #
+# WASM globals support
+#
+wglobaloffs:	array of int;	# mp offset for each global
+wglobaltypes:	array of int;	# wasm type (I32, I64, F32, F64) for each global
+
+#
 # Module data for constants (floats and large integers)
 #
 
@@ -3277,6 +3284,30 @@ wxlate(m: ref Mod)
 		# Reserve space for WMEM_PTR (pointer to memory array) at offset 0
 		# WMEM_PTR is already con 0, so mpoff starts after it
 		mpoff = IBY2WD;  # pointer size
+	}
+
+	# Allocate mp space for globals
+	wglobaloffs = nil;
+	wglobaltypes = nil;
+	if(m.globalsection != nil && len m.globalsection.globals > 0) {
+		ng := len m.globalsection.globals;
+		wglobaloffs = array[ng] of int;
+		wglobaltypes = array[ng] of int;
+		for(gi := 0; gi < ng; gi++) {
+			g := m.globalsection.globals[gi];
+			wglobaltypes[gi] = g.valtype;
+			case g.valtype {
+			I32 =>
+				wglobaloffs[gi] = mpword(int g.initval);
+			I64 =>
+				wglobaloffs[gi] = mpbig(g.initval);
+			F32 =>
+				# initval holds IEEE 754 bits as big
+				wglobaloffs[gi] = mpreal(math->bits32real(int g.initval));
+			F64 =>
+				wglobaloffs[gi] = mpreal(math->bits64real(g.initval));
+			}
+		}
 	}
 
 	# Generate memory init function if module has memory

@@ -223,6 +223,37 @@ loadobj(wasmfile: string): (ref Mod, string)
 					rl[k--] = hd l;
 				m.codesection.codes[i++] = ref Wcode(codesize, locs, rl);
 			}
+		SGLOBAL =>
+			m.globalsection = ref GlobalSection;
+			m.globalsection.size = slen;
+			vlen := operand();
+			m.globalsection.globals = array[vlen] of ref WasmGlobal;
+			i := 0;
+			while (vlen > 0) {
+				valtype := getb();
+				mut := getb();
+				# Read init expression: opcode + operand + end(0x0b)
+				initop := getb();
+				initval := big 0;
+				case initop {
+				Wi32_const =>
+					initval = big soperand();
+				Wi64_const =>
+					initval = big soperand();
+				Wf32_const =>
+					initval = big getw();
+				Wf64_const =>
+					nlo := getw();
+					nhi := getw();
+					initval = (big nhi << 32) | (big nlo & big 16rFFFFFFFF);
+				}
+				endop := getb();  # should be 0x0b (end)
+				if(DEBUG && endop != 16r0b)
+					sys->print("GLOBAL: expected end opcode, got 0x%x\n", endop);
+				if(DEBUG)sys->print("GLOBAL: valtype=0x%x mut=%d initop=0x%x initval=%bd\n", valtype, mut, initop, initval);
+				m.globalsection.globals[i++] = ref WasmGlobal(valtype, mut, initop, initval);
+				vlen--;
+			}
 		SEXPORT =>
 			m.exportsection = ref ExportSection;
 			m.exportsection.size = slen;

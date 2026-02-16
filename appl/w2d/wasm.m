@@ -146,6 +146,19 @@ DataSection: adt {
 	segments: array of ref DataSegment;
 };
 
+# Global variable
+WasmGlobal: adt {
+	valtype: int;	# I32, I64, F32, F64
+	mut: int;	# 0=immutable, 1=mutable
+	initop: int;	# Wi32_const, Wi64_const, Wf32_const, Wf64_const
+	initval: big;	# initial value (fits in big for all types)
+};
+
+GlobalSection: adt {
+	size: int;
+	globals: array of ref WasmGlobal;
+};
+
 Mod: adt
 {
 	magic:  	int;
@@ -158,4 +171,5 @@ Mod: adt
 	exportsection: ref ExportSection;
 	memorysection: ref MemorySection;
 	datasection: ref DataSection;
+	globalsection: ref GlobalSection;
 };
