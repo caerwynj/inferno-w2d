@@ -2238,84 +2238,106 @@ xlatwinst()
 
 	Wcall =>
 		# Function call - arg1 is target function index
+		# WASM function index space: imports first, then locals
 		funcidx := Wi.arg1;
 
-
-		# Get callee's function type
-		if(wmod == nil || wmod.funcsection == nil || wmod.typesection == nil) {
-			i = newi(INOP);
-		} else if(funcidx < 0 || funcidx >= len wmod.funcsection.funcs) {
-			i = newi(INOP);
-		} else {
-			typeidx := wmod.funcsection.funcs[funcidx];
-			calleetype := wmod.typesection.types[typeidx];
+		if(funcidx < nimportfuncs && wimporttypes != nil) {
+			# --- IMPORTED FUNCTION CALL ---
+			calleetype := wimporttypes[funcidx];
+			modidx := wimportmodidx[funcidx];
+			linkidx := wimportfuncidx[funcidx];
+			modptroff := wimpmodptroff[modidx];
 			nargs := len calleetype.args;
 
-			# Get callee's type descriptor ID (should be set if calling backward)
-			calltid := -1;
-			if(funcidx < len wfunctids)
-				calltid = wfunctids[funcidx];
+			# mframe modptroff(mp), $linkidx, frametemp(fp)
+			frametemp := getreg(DIS_W);
+			imf := newi(IMFRAME);
+			addrsind(imf.s, Amp, modptroff);
+			addrimm(imf.m, linkidx);
+			addrsind(imf.d, Afp, frametemp);
 
+			# Copy arguments to callee's frame
+			paramoff := NREG * IBY2WD + 3 * IBY2WD;
+			for(ai := 0; ai < nargs; ai++) {
+				argtype := calleetype.args[ai];
+				dtype := w2dtype(argtype);
+				paramoff = align(paramoff, cellsize[int dtype]);
+				stackdepth := nargs - 1 - ai;
+				imov := newi(wmovinst(argtype));
+				*imov.s = *wsrc(stackdepth);
+				addrdind(imov.d, Afpind, frametemp, paramoff);
+				paramoff += cellsize[int dtype];
+			}
 
-			# If we don't have the TID yet, we can't make the call properly
-			# For now, generate NOP for forward calls
-			if(calltid < 0) {
+			# Set up return pointer if needed
+			if(len calleetype.rets > 0 && Wi.dst != nil) {
+				ilea := newi(ILEA);
+				*ilea.s = *Wi.dst;
+				addrdind(ilea.d, Afpind, frametemp, WREGRET);
+			}
+
+			# mcall frametemp(fp), $linkidx, modptroff(mp)
+			imc := newi(IMCALL);
+			addrsind(imc.s, Afp, frametemp);
+			addrimm(imc.m, linkidx);
+			addrsind(imc.d, Amp, modptroff);
+
+			relreg(ref Addr(Afp, 0, frametemp));
+		} else {
+			# --- LOCAL FUNCTION CALL ---
+			localidx := funcidx - nimportfuncs;
+
+			# Get callee's function type
+			if(wmod == nil || wmod.funcsection == nil || wmod.typesection == nil) {
+				i = newi(INOP);
+			} else if(localidx < 0 || localidx >= len wmod.funcsection.funcs) {
 				i = newi(INOP);
 			} else {
-				# Allocate temp register to hold frame pointer
-				# Use DIS_W (not DIS_P) - the Dis VM tracks frames internally
-				# via the frame instruction. Marking this as DIS_P would cause
-				# the GC to trace a dangling pointer after the call returns.
-				frametemp := getreg(DIS_W);
+				typeidx := wmod.funcsection.funcs[localidx];
+				calleetype := wmod.typesection.types[typeidx];
+				nargs := len calleetype.args;
 
-				# Generate frame instruction: frame $tid, temp(fp)
-				iframe := newi(IFRAME);
-				addrimm(iframe.s, calltid);
-				addrsind(iframe.d, Afp, frametemp);
+				# Get callee's type descriptor ID
+				calltid := -1;
+				if(localidx < len wfunctids)
+					calltid = wfunctids[localidx];
 
-				# Copy arguments to callee's frame
-				# Parameters start at NREG*IBY2WD + 3*IBY2WD = 64
-				# Arguments are on stack: arg[n-1] at top, arg[0] deeper
-				paramoff := NREG * IBY2WD + 3 * IBY2WD;
-				for(ai := 0; ai < nargs; ai++) {
-					argtype := calleetype.args[ai];
-					dtype := w2dtype(argtype);
+				if(calltid < 0) {
+					i = newi(INOP);
+				} else {
+					frametemp := getreg(DIS_W);
 
-					# Align parameter offset
-					paramoff = align(paramoff, cellsize[int dtype]);
+					iframe := newi(IFRAME);
+					addrimm(iframe.s, calltid);
+					addrsind(iframe.d, Afp, frametemp);
 
-					# Get argument from stack (reverse order: arg0 is deepest)
-					# Stack has: arg0 at depth nargs-1, arg(nargs-1) at depth 0
-					stackdepth := nargs - 1 - ai;
+					paramoff := NREG * IBY2WD + 3 * IBY2WD;
+					for(ai := 0; ai < nargs; ai++) {
+						argtype := calleetype.args[ai];
+						dtype := w2dtype(argtype);
+						paramoff = align(paramoff, cellsize[int dtype]);
+						stackdepth := nargs - 1 - ai;
+						imov := newi(wmovinst(argtype));
+						*imov.s = *wsrc(stackdepth);
+						addrdind(imov.d, Afpind, frametemp, paramoff);
+						paramoff += cellsize[int dtype];
+					}
 
-					# Copy argument to callee's frame
-					imov := newi(wmovinst(argtype));
-					*imov.s = *wsrc(stackdepth);
-					addrdind(imov.d, Afpind, frametemp, paramoff);
+					if(len calleetype.rets > 0 && Wi.dst != nil) {
+						ilea := newi(ILEA);
+						*ilea.s = *Wi.dst;
+						addrdind(ilea.d, Afpind, frametemp, WREGRET);
+					}
 
-					paramoff += cellsize[int dtype];
+					icall := newi(ICALL);
+					addrsind(icall.s, Afp, frametemp);
+					addrimm(icall.d, 0);  # PC patched later
+
+					# Record call for patching (using local index)
+					wcallinsts = ref Callpatch(icall, localidx) :: wcallinsts;
+
+					relreg(ref Addr(Afp, 0, frametemp));
 				}
-
-				# If function returns a value, set up return pointer in callee's frame
-				# The return value will be written to Wi.dst in caller's frame
-				if(len calleetype.rets > 0 && Wi.dst != nil) {
-					# Set callee's WREGRET to point to where we want the return value
-					# lea dst, WREGRET(frametemp(fp))
-					ilea := newi(ILEA);
-					*ilea.s = *Wi.dst;  # address of our destination
-					addrdind(ilea.d, Afpind, frametemp, WREGRET);
-				}
-
-				# Generate call instruction: call frame, $pc
-				icall := newi(ICALL);
-				addrsind(icall.s, Afp, frametemp);
-				addrimm(icall.d, 0);  # PC patched later
-
-				# Record call for patching
-				wcallinsts = ref Callpatch(icall, funcidx) :: wcallinsts;
-
-				# Release frame temp
-				relreg(ref Addr(Afp, 0, frametemp));
 			}
 		}
 
@@ -3027,15 +3049,28 @@ wglobaloffs:	array of int;	# mp offset for each global
 wglobaltypes:	array of int;	# wasm type (I32, I64, F32, F64) for each global
 
 #
+# WASM imports support
+#
+nimportfuncs:	int;			# number of imported functions
+wimporttypes:	array of ref FuncType;	# type for each imported function
+wimportmodidx:	array of int;		# unique module index for each import
+wimportfuncidx:	array of int;		# function index within its module's LDT
+wimportuniqmods:	array of string;	# unique module names
+nimportuniqmods:	int;			# number of unique modules
+wimpmodpathoff:	array of int;		# mp offset of path string for each module
+wimpmodptroff:	array of int;		# mp offset of module pointer for each module
+
+#
 # Module data for constants (floats and large integers)
 #
 
 MpConst: adt {
 	off:	int;
-	kind:	int;	# DEFW, DEFF, or DEFL
+	kind:	int;	# DEFW, DEFF, DEFL, or DEFS
 	ival:	int;
 	rval:	real;
 	bval:	big;
+	sval:	string;
 };
 
 mpconsts:	list of ref MpConst;
@@ -3050,7 +3085,7 @@ mpreal(v: real): int
 	mpoff = align(mpoff, IBY2LG);
 	off := mpoff;
 	mpoff += IBY2LG;
-	mpconsts = ref MpConst(off, DEFF, 0, v, big 0) :: mpconsts;
+	mpconsts = ref MpConst(off, DEFF, 0, v, big 0, nil) :: mpconsts;
 	return off;
 }
 
@@ -3063,7 +3098,7 @@ mpword(v: int): int
 	mpoff = align(mpoff, IBY2WD);
 	off := mpoff;
 	mpoff += IBY2WD;
-	mpconsts = ref MpConst(off, DEFW, v, 0.0, big 0) :: mpconsts;
+	mpconsts = ref MpConst(off, DEFW, v, 0.0, big 0, nil) :: mpconsts;
 	return off;
 }
 
@@ -3076,7 +3111,21 @@ mpbig(v: big): int
 	mpoff = align(mpoff, IBY2LG);
 	off := mpoff;
 	mpoff += IBY2LG;
-	mpconsts = ref MpConst(off, DEFL, 0, 0.0, v) :: mpconsts;
+	mpconsts = ref MpConst(off, DEFL, 0, 0.0, v, nil) :: mpconsts;
+	return off;
+}
+
+#
+# Allocate a string pointer in module data.
+# Returns the mp offset where the string pointer lives.
+#
+
+mpstring(s: string): int
+{
+	mpoff = align(mpoff, IBY2WD);
+	off := mpoff;
+	mpoff += IBY2WD;
+	mpconsts = ref MpConst(off, DEFS, 0, 0.0, big 0, s) :: mpconsts;
 	return off;
 }
 
@@ -3096,6 +3145,24 @@ wdisnvar()
 wasmvar()
 {
 	bout.puts("\tvar\t@mp," + string mpoff + "\n");
+
+	# Output module data constants for assembly
+	rl: list of ref MpConst;
+	for(l := mpconsts; l != nil; l = tl l)
+		rl = hd l :: rl;
+	for(; rl != nil; rl = tl rl) {
+		c := hd rl;
+		case c.kind {
+		DEFW =>
+			bout.puts("\tword\t@mp+" + string c.off + "," + string c.ival + "\n");
+		DEFF =>
+			bout.puts("\treal\t@mp+" + string c.off + "," + string c.rval + "\n");
+		DEFL =>
+			bout.puts("\tlong\t@mp+" + string c.off + "," + string c.bval + "\n");
+		DEFS =>
+			bout.puts("\tstring\t@mp+" + string c.off + ",\"" + c.sval + "\"\n");
+		}
+	}
 }
 
 #
@@ -3120,6 +3187,8 @@ wdisvar()
 			disreal(c.off, c.rval);
 		DEFL =>
 			dislong(c.off, c.bval);
+		DEFS =>
+			disstring(c.off, c.sval);
 		}
 	}
 
@@ -3137,31 +3206,117 @@ wdisvar()
 wdisout()
 {
 	discon(XMAGIC);
-	discon(DONTCOMPILE);	# runtime "hints"
+	rtflags := DONTCOMPILE;
+	if(nimportuniqmods > 0)
+		rtflags |= HASLDT;
+	discon(rtflags);	# runtime "hints"
 	disstackext();		# minimum stack extent size
 	disninst();		# number of instructions
-	wdisnvar();		# number of module data bytes (0 for WASM)
+	wdisnvar();		# number of module data bytes
 	disndesc();		# number of type descriptors
 	disnlinks();		# number of links
 	disentry();		# entry point
 	disinst();		# instructions
 	disdesc();		# type descriptors
-	wdisvar();		# module data (empty for WASM)
+	wdisvar();		# module data
 	dismod();		# module name
 	dislinks();		# link section
+	if(nimportuniqmods > 0)
+		wdisldts();	# linkage descriptor tables
 }
 
 #
-# Generate memory initialization function.
-# This allocates a byte array for WASM linear memory and initializes it
-# with data from the data section.
+# Emit LDTS section for .dis binary output.
+# One linkage descriptor table per unique imported module.
+#
+wdisldts()
+{
+	discon(nimportuniqmods);
+	for(mi := 0; mi < nimportuniqmods; mi++) {
+		# Count functions imported from this module
+		nfuncs := 0;
+		for(fi := 0; fi < nimportfuncs; fi++)
+			if(wimportmodidx[fi] == mi)
+				nfuncs++;
+		discon(nfuncs);
+
+		# Emit each function entry (in order of wimportfuncidx)
+		for(fi = 0; fi < nimportfuncs; fi++) {
+			if(wimportmodidx[fi] != mi)
+				continue;
+			ft := wimporttypes[fi];
+			sig := wfuncsig(ft);
+			disword(sig);
+
+			# Get function name from import section
+			fname := wimportfuncname(fi);
+			d := array of byte fname;
+			bout.write(d, len d);
+			bout.putb(byte 0);
+		}
+	}
+	discon(0);  # terminator
+}
+
+#
+# Emit LDTS section for assembly output.
+#
+wasmldts()
+{
+	# Compute total size of linkage descriptor data
+	# For now just emit the ldts directive with number of tables
+	bout.puts("\tldts\t@ldt," + string nimportuniqmods + "\n");
+	ldtoff := 0;
+	for(mi := 0; mi < nimportuniqmods; mi++) {
+		# Count functions from this module
+		nfuncs := 0;
+		for(fi := 0; fi < nimportfuncs; fi++)
+			if(wimportmodidx[fi] == mi)
+				nfuncs++;
+		bout.puts("\tword\t@ldt+" + string ldtoff + "," + string nfuncs + "\n");
+		ldtoff += IBY2WD;
+		for(fi = 0; fi < nimportfuncs; fi++) {
+			if(wimportmodidx[fi] != mi)
+				continue;
+			ft := wimporttypes[fi];
+			sig := wfuncsig(ft);
+			fname := wimportfuncname(fi);
+			# Word-align
+			ldtoff = align(ldtoff, IBY2WD);
+			bout.puts("\text\t@ldt+" + string ldtoff + ",0x" + hex(sig, 0) + ",\"" + fname + "\"\n");
+			# Advance past sig (4 bytes) + name + null + alignment
+			ldtoff += IBY2WD + len array of byte fname + 1;
+		}
+		ldtoff = align(ldtoff, IBY2WD);
+	}
+}
+
+#
+# Get the function name for import function index fi.
+#
+wimportfuncname(fi: int): string
+{
+	idx := 0;
+	if(wmod != nil && wmod.importsection != nil) {
+		for(ii := 0; ii < len wmod.importsection.imports; ii++) {
+			pick imp := wmod.importsection.imports[ii] {
+			Func =>
+				if(idx == fi)
+					return imp.name;
+				idx++;
+			}
+		}
+	}
+	return "unknown";
+}
+
+#
+# Generate initialization function.
+# This allocates a byte array for WASM linear memory, initializes it
+# with data from the data section, and loads imported modules.
 #
 genmeminit(m: ref Mod)
 {
-	# Create type descriptor for byte array element (1 byte, no pointers)
-	# Use size=1, nmap=0, empty map for a byte array with no pointer fields
-	WMEM_DESC = descid(1, 0, array[0] of byte);
-
 	# Open frame for init function - no params, no locals, no return
 	frameoff = NREG * IBY2WD + 3 * IBY2WD;
 	tmpslwm = frameoff;
@@ -3170,68 +3325,72 @@ genmeminit(m: ref Mod)
 
 	initpc := pcdis;
 
-	# newa  count, typedesc, dst
-	# Allocate byte array: newaz $count, $typedesc, temp
-	# Use NEWAZ instead of NEWA to ensure zero-initialization
-	# (NEWA leaves non-pointer values undefined, NEWAZ zeroes them)
-	# Get memory size from memory section (in pages, 64KB each)
-	memsize := m.memorysection.memories[0].min * 65536;
-	if(memsize == 0)
-		memsize = 65536;  # default to 1 page if min is 0
-	WMEM_PAGES = m.memorysection.memories[0].min;
-	temp := getreg(DIS_P);
+	# Memory initialization
+	if(hasmemory) {
+		# Create type descriptor for byte array element (1 byte, no pointers)
+		WMEM_DESC = descid(1, 0, array[0] of byte);
 
-	inewa := newi(INEWAZ);
-	addrimm(inewa.s, memsize);
-	addrimm(inewa.m, WMEM_DESC);
-	addrsind(inewa.d, Afp, temp);
+		# Allocate byte array: newaz $count, $typedesc, temp
+		memsize := m.memorysection.memories[0].min * 65536;
+		if(memsize == 0)
+			memsize = 65536;  # default to 1 page if min is 0
+		WMEM_PAGES = m.memorysection.memories[0].min;
+		temp := getreg(DIS_P);
 
-	# Store array pointer in module data: movp temp(fp), WMEM_PTR(mp)
-	imov := newi(IMOVP);
-	addrsind(imov.s, Afp, temp);
-	addrsind(imov.d, Amp, WMEM_PTR);
+		inewa := newi(INEWAZ);
+		addrimm(inewa.s, memsize);
+		addrimm(inewa.m, WMEM_DESC);
+		addrsind(inewa.d, Afp, temp);
 
-	# Initialize memory with data section contents
-	if(m.datasection != nil) {
-		for(i := 0; i < len m.datasection.segments; i++) {
-			seg := m.datasection.segments[i];
-			if(seg.memidx < 0)  # skip passive segments
-				continue;
-			if(len seg.data == 0)  # skip empty segments
-				continue;
+		# Store array pointer in module data: movp temp(fp), WMEM_PTR(mp)
+		imov := newi(IMOVP);
+		addrsind(imov.s, Afp, temp);
+		addrsind(imov.d, Amp, WMEM_PTR);
 
-			# For each byte in the data segment, store it to memory
-			# We generate: movb $byte, offset(temp(fp))
-			# Using indb to get pointer to element, then movb to store
+		# Initialize memory with data section contents
+		if(m.datasection != nil) {
+			for(i := 0; i < len m.datasection.segments; i++) {
+				seg := m.datasection.segments[i];
+				if(seg.memidx < 0)  # skip passive segments
+					continue;
+				if(len seg.data == 0)  # skip empty segments
+					continue;
 
-			tmp_ptr := getreg(DIS_W);      # byte address (interior pointer from indb, not GC-traced)
+				tmp_ptr := getreg(DIS_W);
 
-			for(j := 0; j < len seg.data; j++) {
-				byteoff := seg.offset + j;
-				byteval := int seg.data[j];
+				for(j := 0; j < len seg.data; j++) {
+					byteoff := seg.offset + j;
+					byteval := int seg.data[j];
 
-				# Get pointer to element: indb temp, tmp_ptr, $byteoff
-				# Use immediate index instead of register
-				iindb := newi(IINDB);
-				addrsind(iindb.s, Afp, temp);
-				addrsind(iindb.m, Afp, tmp_ptr);
-				addrimm(iindb.d, byteoff);
+					iindb := newi(IINDB);
+					addrsind(iindb.s, Afp, temp);
+					addrsind(iindb.m, Afp, tmp_ptr);
+					addrimm(iindb.d, byteoff);
 
-				# Store byte: movb $byte, 0(tmp_ptr(fp))
-				imovb := newi(IMOVB);
-				addrimm(imovb.s, byteval);
-				addrdind(imovb.d, Afpind, tmp_ptr, 0);
+					imovb := newi(IMOVB);
+					addrimm(imovb.s, byteval);
+					addrdind(imovb.d, Afpind, tmp_ptr, 0);
+				}
+
+				relreg(ref Addr(Afp, 0, tmp_ptr));
 			}
-
-			relreg(ref Addr(Afp, 0, tmp_ptr));
 		}
+
+		relreg(ref Addr(Afp, 0, temp));
+	}
+
+	# Load imported modules
+	for(mi := 0; mi < nimportuniqmods; mi++) {
+		# load pathoff(mp), $ldtidx, ptroff(mp)
+		iload := newi(ILOAD);
+		addrsind(iload.s, Amp, wimpmodpathoff[mi]);
+		addrimm(iload.m, mi);
+		addrsind(iload.d, Amp, wimpmodptroff[mi]);
 	}
 
 	# Return
 	iret := newi(IRET);
 	iret = iret;
-
-	relreg(ref Addr(Afp, 0, temp));
 
 	# Close frame
 	frameoff = align(frameoff, IBY2LG);
@@ -3277,6 +3436,93 @@ wxlate(m: ref Mod)
 	mpoff = 0;
 	mpconsts = nil;
 
+	# Count imported functions and build import metadata
+	nimportfuncs = 0;
+	wimporttypes = nil;
+	wimportmodidx = nil;
+	wimportfuncidx = nil;
+	wimportuniqmods = nil;
+	nimportuniqmods = 0;
+	wimpmodpathoff = nil;
+	wimpmodptroff = nil;
+
+	if(m.importsection != nil && len m.importsection.imports > 0) {
+		# First pass: count function imports
+		for(ii := 0; ii < len m.importsection.imports; ii++) {
+			pick imp := m.importsection.imports[ii] {
+			Func =>
+				nimportfuncs++;
+			}
+		}
+
+		if(nimportfuncs > 0) {
+			wimporttypes = array[nimportfuncs] of ref FuncType;
+			wimportmodidx = array[nimportfuncs] of int;
+			wimportfuncidx = array[nimportfuncs] of int;
+
+			# Collect unique module names and build per-import metadata
+			uniqmods: list of string;
+			nuniq := 0;
+			fidx := 0;
+			for(ii = 0; ii < len m.importsection.imports; ii++) {
+				pick imp := m.importsection.imports[ii] {
+				Func =>
+					wimporttypes[fidx] = m.typesection.types[imp.typeidx];
+					# Find or add unique module
+					modname := imp.modname;
+					modidx := -1;
+					ui := 0;
+					for(ul := uniqmods; ul != nil; ul = tl ul) {
+						if(hd ul == modname) {
+							modidx = ui;
+							break;
+						}
+						ui++;
+					}
+					if(modidx < 0) {
+						modidx = nuniq;
+						uniqmods = uniqmods;  # keep list
+						# Append to end of list
+						if(uniqmods == nil)
+							uniqmods = modname :: nil;
+						else {
+							# Build new list with modname at end
+							rev: list of string;
+							for(tmp := uniqmods; tmp != nil; tmp = tl tmp)
+								rev = hd tmp :: rev;
+							uniqmods = modname :: nil;
+							for(; rev != nil; rev = tl rev)
+								uniqmods = hd rev :: uniqmods;
+						}
+						nuniq++;
+					}
+					wimportmodidx[fidx] = modidx;
+					fidx++;
+				}
+			}
+
+			# Convert unique module list to array
+			nimportuniqmods = nuniq;
+			wimportuniqmods = array[nuniq] of string;
+			ui2 := 0;
+			for(ul2 := uniqmods; ul2 != nil; ul2 = tl ul2)
+				wimportuniqmods[ui2++] = hd ul2;
+
+			# Compute per-module function indices
+			# wimportfuncidx[i] = index of import i among imports from the same module
+			perfunccount := array[nuniq] of { * => 0 };
+			fidx = 0;
+			for(ii = 0; ii < len m.importsection.imports; ii++) {
+				pick imp := m.importsection.imports[ii] {
+				Func =>
+					modidx := wimportmodidx[fidx];
+					wimportfuncidx[fidx] = perfunccount[modidx]++;
+					fidx++;
+				}
+			}
+		}
+	}
+
 	# Check for memory section and reserve space for memory pointer
 	hasmemory = 0;
 	if(m.memorysection != nil && len m.memorysection.memories > 0) {
@@ -3310,8 +3556,25 @@ wxlate(m: ref Mod)
 		}
 	}
 
-	# Generate memory init function if module has memory
-	if(hasmemory)
+	# Reserve mp space for import module paths and pointers
+	if(nimportuniqmods > 0) {
+		wimpmodpathoff = array[nimportuniqmods] of int;
+		wimpmodptroff = array[nimportuniqmods] of int;
+		for(mi := 0; mi < nimportuniqmods; mi++) {
+			# Store module path string in mp
+			path := "./" + wimportuniqmods[mi] + ".dis";
+			wimpmodpathoff[mi] = mpstring(path);
+		}
+		for(mi = 0; mi < nimportuniqmods; mi++) {
+			# Reserve slot for module pointer (result of load)
+			mpoff = align(mpoff, IBY2WD);
+			wimpmodptroff[mi] = mpoff;
+			mpoff += IBY2WD;
+		}
+	}
+
+	# Generate memory init function (also handles import loading)
+	if(hasmemory || nimportuniqmods > 0)
 		genmeminit(m);
 
 	# Initialize function call support
@@ -3362,10 +3625,11 @@ wxlate(m: ref Mod)
 		wfuncpcs[i] = funcpc;
 
 		# Create link for this function only if it's exported
+		# Note: export idx is in WASM function index space (imports + locals)
 		if(m.exportsection != nil) {
 			for(j := 0; j < len m.exportsection.exports; j++) {
 				exp := m.exportsection.exports[j];
-				if(exp.kind == 0 && exp.idx == i) {  # kind 0 = function
+				if(exp.kind == 0 && exp.idx == i + nimportfuncs) {
 					funcname := sanitizename(exp.name);
 					xtrnlink(tid, funcpc, wfuncsig(functype), funcname, "");
 					break;
@@ -3374,7 +3638,7 @@ wxlate(m: ref Mod)
 		}
 	}
 
-	# Patch all call targets
+	# Patch all call targets (funcidx is local index, already adjusted)
 	for(cl := wcallinsts; cl != nil; cl = tl cl) {
 		cp := hd cl;
 		if(cp.funcidx >= 0 && cp.funcidx < len wfuncpcs) {
@@ -3389,9 +3653,13 @@ wxlate(m: ref Mod)
 	maplen := mpoff / (8*IBY2WD) + (mpoff % (8*IBY2WD) != 0);
 	mpmap := array[maplen] of { * => byte 0 };
 	# Mark WMEM_PTR as a pointer in the map (offset 0, first word)
-	# The map bit vector has MSB = lowest address
 	if(hasmemory && maplen > 0)
-		mpmap[0] |= byte 16r80;  # bit 7 = word at offset 0
+		setbit(mpmap, WMEM_PTR);
+	# Mark import module path strings as pointers
+	for(mi := 0; mi < nimportuniqmods; mi++) {
+		setbit(mpmap, wimpmodpathoff[mi]);
+		setbit(mpmap, wimpmodptroff[mi]);
+	}
 	mpdescid(mpoff, maplen, mpmap);
 
 }

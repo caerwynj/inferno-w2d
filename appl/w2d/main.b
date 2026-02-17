@@ -43,6 +43,8 @@ translate(in: string, out: string)
 		wasmvar();
 		asmmod();
 		asmlinks();
+		if(nimportuniqmods > 0)
+			wasmldts();
 	} else
 		wdisout();	# generate .dis file
 

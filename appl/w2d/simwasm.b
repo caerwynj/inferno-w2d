@@ -295,13 +295,23 @@ simwinst(pc: int)
 		}
 
 	Wcall =>
-		# function call - arg1 is function index
+		# function call - arg1 is function index (imports first, then locals)
 		funcidx := Wi.arg1;
-		if(wmod != nil && wmod.funcsection != nil && wmod.typesection != nil &&
-		   funcidx >= 0 && funcidx < len wmod.funcsection.funcs) {
-			typeidx := wmod.funcsection.funcs[funcidx];
-			calleetype := wmod.typesection.types[typeidx];
-
+		calleetype: ref FuncType = nil;
+		if(funcidx < nimportfuncs) {
+			# Imported function
+			if(wimporttypes != nil)
+				calleetype = wimporttypes[funcidx];
+		} else {
+			# Local function
+			localidx := funcidx - nimportfuncs;
+			if(wmod != nil && wmod.funcsection != nil && wmod.typesection != nil &&
+			   localidx >= 0 && localidx < len wmod.funcsection.funcs) {
+				typeidx := wmod.funcsection.funcs[localidx];
+				calleetype = wmod.typesection.types[typeidx];
+			}
+		}
+		if(calleetype != nil) {
 			# Pop arguments (they're on stack in order: arg0 deepest, argN-1 on top)
 			for(ai := len calleetype.args - 1; ai >= 0; ai--) {
 				r = wpop();

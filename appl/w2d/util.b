@@ -238,6 +238,16 @@ reset()
 	fabort = 0;
 	genmod = 0;
 	bout = nil;
+
+	# wxlate.b imports
+	nimportfuncs = 0;
+	wimporttypes = nil;
+	wimportmodidx = nil;
+	wimportfuncidx = nil;
+	wimportuniqmods = nil;
+	nimportuniqmods = 0;
+	wimpmodpathoff = nil;
+	wimpmodptroff = nil;
 }
 
 #
@@ -297,6 +307,22 @@ genmodfile(m: ref Mod, basename: string)
 
 	# Write module header
 	sys->fprint(fd, "%s: module\n{\n", modname);
+
+	# Write init function declaration if module needs initialization
+	# (has memory or imports)
+	hasinit := 0;
+	if(m.memorysection != nil && len m.memorysection.memories > 0)
+		hasinit = 1;
+	if(m.importsection != nil) {
+		for(j := 0; j < len m.importsection.imports; j++) {
+			pick imp := m.importsection.imports[j] {
+			Func =>
+				hasinit = 1;
+			}
+		}
+	}
+	if(hasinit)
+		sys->fprint(fd, "\tinit: fn();\n");
 
 	# Write function exports
 	if(m.exportsection != nil) {
