@@ -197,3 +197,19 @@ Wi32_extend16_s,	#0xc1
 Wi64_extend8_s,		#0xc2
 Wi64_extend16_s,	#0xc3
 Wi64_extend32_s: con iota;	#0xc4
+
+# 0xFC prefix opcodes (multi-byte encoding)
+Wfc_prefix: con 16rFC;
+# Sub-opcodes for 0xFC prefix:
+Wi32_trunc_sat_f32_s: con 16rC5;	# FC 00
+Wi32_trunc_sat_f32_u: con 16rC6;	# FC 01
+Wi32_trunc_sat_f64_s: con 16rC7;	# FC 02
+Wi32_trunc_sat_f64_u: con 16rC8;	# FC 03
+Wi64_trunc_sat_f32_s: con 16rC9;	# FC 04
+Wi64_trunc_sat_f32_u: con 16rCA;	# FC 05
+Wi64_trunc_sat_f64_s: con 16rCB;	# FC 06
+Wi64_trunc_sat_f64_u: con 16rCC;	# FC 07
+Wmemory_init: con 16rCD;		# FC 08
+Wdata_drop: con 16rCE;			# FC 09
+Wmemory_copy: con 16rCF;		# FC 0A
+Wmemory_fill: con 16rD0;		# FC 0B

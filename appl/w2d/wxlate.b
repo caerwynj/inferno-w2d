@@ -75,6 +75,7 @@ wfuncpcs: array of int;		# entry PC for each function
 # Track calls for patching
 Callpatch: adt {
 	callinst: ref Inst;	# the call instruction to patch
+	frameinst: ref Inst;	# the frame instruction to patch (for tid)
 	funcidx: int;		# target function index
 };
 wcallinsts: list of ref Callpatch;
@@ -1055,7 +1056,7 @@ xi64clz()
 {
 	# Save starting PC for branch target calculation
 	start_pc := pcdis;
-	end_pc := start_pc + 31;  # 6 steps + zero check + NOPs
+	end_pc := start_pc + 29;  # 6 steps + zero check (PC 0-28), next instr at 29
 
 	# Allocate registers (64-bit for value, 64-bit for count since result is i64)
 	tmp_x := getreg(DIS_L);  # working value
@@ -1225,13 +1226,10 @@ xi64clz()
 	addrsind(iadd6.m, Afp, tmp_n);
 	addrsind(iadd6.d, Afp, tmp_n);
 
-	# PC 28-30: dst = n (3 NOPs to reach end_pc=31)
+	# PC 28: dst = n (end_pc=29 is next instruction, zero-case jmp lands here+1)
 	imov_final := newi(IMOVL);
 	addrsind(imov_final.s, Afp, tmp_n);
 	*imov_final.d = *Wi.dst;
-
-	inop1 := newi(INOP);
-	inop2 := newi(INOP);
 
 	# Release temp registers
 	relreg(imov0.d);
@@ -1249,7 +1247,7 @@ xi64ctz()
 {
 	# Save starting PC for branch target calculation
 	start_pc := pcdis;
-	end_pc := start_pc + 31;
+	end_pc := start_pc + 29;  # sequence ends at PC 28, next at 29
 
 	# Allocate registers
 	tmp_x := getreg(DIS_L);  # working value
@@ -1419,13 +1417,10 @@ xi64ctz()
 	addrsind(iadd6.m, Afp, tmp_n);
 	addrsind(iadd6.d, Afp, tmp_n);
 
-	# PC 28-30: dst = n
+	# PC 28: dst = n
 	imov_final := newi(IMOVL);
 	addrsind(imov_final.s, Afp, tmp_n);
 	*imov_final.d = *Wi.dst;
-
-	inop1 := newi(INOP);
-	inop2 := newi(INOP);
 
 	# Release temp registers
 	relreg(imov0.d);
@@ -2124,6 +2119,195 @@ xmemstore(nbytes: int, dtype: byte)
 }
 
 #
+# Memory fill: fill n bytes at dst in linear memory with byte value val.
+# Stack (wsrc): wsrc(0)=n, wsrc(1)=val, wsrc(2)=dst
+#
+xmemfill()
+{
+	si: int;
+
+	saved_tmpssz := tmpssz;
+	saved_refcnts := array[saved_tmpssz] of int;
+	for(si = 0; si < saved_tmpssz; si += IBY2WD) {
+		saved_refcnts[si] = tmps[si].refcnt;
+		if(tmps[si].dtype != DIS_X && tmps[si].refcnt == 0)
+			tmps[si].refcnt = 1;
+	}
+
+	tmp_dst    := getreg(DIS_W);
+	tmp_val    := getreg(DIS_W);
+	tmp_n      := getreg(DIS_W);
+	tmp_memptr := getreg(DIS_P);
+	tmp_baddr  := getreg(DIS_W);
+	tmp_byte   := getreg(DIS_W);
+
+	# Copy stack values to temporaries
+	icopy_dst := newi(IMOVW);
+	*icopy_dst.s = *wsrc(2);
+	addrsind(icopy_dst.d, Afp, tmp_dst);
+
+	icopy_val := newi(IMOVW);
+	*icopy_val.s = *wsrc(1);
+	addrsind(icopy_val.d, Afp, tmp_val);
+
+	icopy_n := newi(IMOVW);
+	*icopy_n.s = *wsrc(0);
+	addrsind(icopy_n.d, Afp, tmp_n);
+
+	# Load linear memory base pointer
+	imovp := newi(IMOVP);
+	addrsind(imovp.s, Amp, WMEM_PTR);
+	addrsind(imovp.d, Afp, tmp_memptr);
+
+	# Compute byte value once before loop (truncate val to low 8 bits)
+	icvt := newi(ICVTWB);
+	addrsind(icvt.s, Afp, tmp_val);
+	addrsind(icvt.d, Afp, tmp_byte);
+
+	# Loop: while n > 0 { mem[dst] = byte; dst++; n--; }
+	loop_pc := pcdis;
+	ibr_end := newi(IBEQW);
+	addrsind(ibr_end.s, Afp, tmp_n);
+	addrimm(ibr_end.m, 0);
+	addrimm(ibr_end.d, 0);  # target patched after loop
+
+	iindb := newi(IINDB);
+	addrsind(iindb.s, Afp, tmp_memptr);
+	addrsind(iindb.m, Afp, tmp_baddr);
+	addrsind(iindb.d, Afp, tmp_dst);
+
+	imovb := newi(IMOVB);
+	addrsind(imovb.s, Afp, tmp_byte);
+	addrdind(imovb.d, Afpind, tmp_baddr, 0);
+
+	iinc := newi(IADDW);
+	addrimm(iinc.s, 1);
+	addrsind(iinc.m, Afp, tmp_dst);
+	addrsind(iinc.d, Afp, tmp_dst);
+
+	idec := newi(ISUBW);
+	addrimm(idec.s, 1);
+	addrsind(idec.m, Afp, tmp_n);
+	addrsind(idec.d, Afp, tmp_n);
+
+	ijmp := newi(IJMP);
+	addrimm(ijmp.d, loop_pc);
+
+	# Patch loop exit branch
+	addrimm(ibr_end.d, pcdis);
+
+	relreg(ref Addr(Afp, 0, tmp_dst));
+	relreg(ref Addr(Afp, 0, tmp_val));
+	relreg(ref Addr(Afp, 0, tmp_n));
+	relreg(ref Addr(Afp, 0, tmp_memptr));
+	relreg(ref Addr(Afp, 0, tmp_baddr));
+	relreg(ref Addr(Afp, 0, tmp_byte));
+
+	for(si = 0; si < saved_tmpssz; si += IBY2WD)
+		tmps[si].refcnt = saved_refcnts[si];
+}
+
+#
+# Memory copy: copy n bytes from src to dst in linear memory.
+# Stack (wsrc): wsrc(0)=n, wsrc(1)=src, wsrc(2)=dst
+#
+xmemcopy()
+{
+	si: int;
+
+	saved_tmpssz := tmpssz;
+	saved_refcnts := array[saved_tmpssz] of int;
+	for(si = 0; si < saved_tmpssz; si += IBY2WD) {
+		saved_refcnts[si] = tmps[si].refcnt;
+		if(tmps[si].dtype != DIS_X && tmps[si].refcnt == 0)
+			tmps[si].refcnt = 1;
+	}
+
+	tmp_dst    := getreg(DIS_W);
+	tmp_src    := getreg(DIS_W);
+	tmp_n      := getreg(DIS_W);
+	tmp_memptr := getreg(DIS_P);
+	tmp_sptr   := getreg(DIS_W);
+	tmp_dptr   := getreg(DIS_W);
+	tmp_byte   := getreg(DIS_W);
+
+	# Copy stack values to temporaries
+	icopy_dst := newi(IMOVW);
+	*icopy_dst.s = *wsrc(2);
+	addrsind(icopy_dst.d, Afp, tmp_dst);
+
+	icopy_src := newi(IMOVW);
+	*icopy_src.s = *wsrc(1);
+	addrsind(icopy_src.d, Afp, tmp_src);
+
+	icopy_n := newi(IMOVW);
+	*icopy_n.s = *wsrc(0);
+	addrsind(icopy_n.d, Afp, tmp_n);
+
+	# Load linear memory base pointer
+	imovp := newi(IMOVP);
+	addrsind(imovp.s, Amp, WMEM_PTR);
+	addrsind(imovp.d, Afp, tmp_memptr);
+
+	# Loop: while n > 0 { mem[dst] = mem[src]; dst++; src++; n--; }
+	loop_pc := pcdis;
+	ibr_end := newi(IBEQW);
+	addrsind(ibr_end.s, Afp, tmp_n);
+	addrimm(ibr_end.m, 0);
+	addrimm(ibr_end.d, 0);  # target patched after loop
+
+	iindb_s := newi(IINDB);
+	addrsind(iindb_s.s, Afp, tmp_memptr);
+	addrsind(iindb_s.m, Afp, tmp_sptr);
+	addrsind(iindb_s.d, Afp, tmp_src);
+
+	iloadb := newi(IMOVB);
+	addrdind(iloadb.s, Afpind, tmp_sptr, 0);
+	addrsind(iloadb.d, Afp, tmp_byte);
+
+	iindb_d := newi(IINDB);
+	addrsind(iindb_d.s, Afp, tmp_memptr);
+	addrsind(iindb_d.m, Afp, tmp_dptr);
+	addrsind(iindb_d.d, Afp, tmp_dst);
+
+	istoreb := newi(IMOVB);
+	addrsind(istoreb.s, Afp, tmp_byte);
+	addrdind(istoreb.d, Afpind, tmp_dptr, 0);
+
+	iinc_src := newi(IADDW);
+	addrimm(iinc_src.s, 1);
+	addrsind(iinc_src.m, Afp, tmp_src);
+	addrsind(iinc_src.d, Afp, tmp_src);
+
+	iinc_dst := newi(IADDW);
+	addrimm(iinc_dst.s, 1);
+	addrsind(iinc_dst.m, Afp, tmp_dst);
+	addrsind(iinc_dst.d, Afp, tmp_dst);
+
+	idec := newi(ISUBW);
+	addrimm(idec.s, 1);
+	addrsind(idec.m, Afp, tmp_n);
+	addrsind(idec.d, Afp, tmp_n);
+
+	ijmp := newi(IJMP);
+	addrimm(ijmp.d, loop_pc);
+
+	# Patch loop exit branch
+	addrimm(ibr_end.d, pcdis);
+
+	relreg(ref Addr(Afp, 0, tmp_dst));
+	relreg(ref Addr(Afp, 0, tmp_src));
+	relreg(ref Addr(Afp, 0, tmp_n));
+	relreg(ref Addr(Afp, 0, tmp_memptr));
+	relreg(ref Addr(Afp, 0, tmp_sptr));
+	relreg(ref Addr(Afp, 0, tmp_dptr));
+	relreg(ref Addr(Afp, 0, tmp_byte));
+
+	for(si = 0; si < saved_tmpssz; si += IBY2WD)
+		tmps[si].refcnt = saved_refcnts[si];
+}
+
+#
 # Translate a single WASM instruction to Dis.
 #
 
@@ -2141,7 +2325,7 @@ xlatwinst()
 		i = newi(IEXIT);
 
 	Wnop =>
-		i = newi(INOP);
+		;  # WASM nop: no instruction (INOP opcode=0 is illegal in Dis VM)
 
 	# control flow
 	Wblock or Wloop =>
@@ -2297,47 +2481,45 @@ xlatwinst()
 				calleetype := wmod.typesection.types[typeidx];
 				nargs := len calleetype.args;
 
-				# Get callee's type descriptor ID
+				# Get callee's type descriptor ID (may be -1 if not yet processed)
 				calltid := -1;
 				if(localidx < len wfunctids)
 					calltid = wfunctids[localidx];
+				if(calltid < 0)
+					calltid = 1;  # placeholder; patched after all funcs processed
 
-				if(calltid < 0) {
-					i = newi(INOP);
-				} else {
-					frametemp := getreg(DIS_W);
+				frametemp := getreg(DIS_W);
 
-					iframe := newi(IFRAME);
-					addrimm(iframe.s, calltid);
-					addrsind(iframe.d, Afp, frametemp);
+				iframe := newi(IFRAME);
+				addrimm(iframe.s, calltid);
+				addrsind(iframe.d, Afp, frametemp);
 
-					paramoff := NREG * IBY2WD + 3 * IBY2WD;
-					for(ai := 0; ai < nargs; ai++) {
-						argtype := calleetype.args[ai];
-						dtype := w2dtype(argtype);
-						paramoff = align(paramoff, cellsize[int dtype]);
-						stackdepth := nargs - 1 - ai;
-						imov := newi(wmovinst(argtype));
-						*imov.s = *wsrc(stackdepth);
-						addrdind(imov.d, Afpind, frametemp, paramoff);
-						paramoff += cellsize[int dtype];
-					}
-
-					if(len calleetype.rets > 0 && Wi.dst != nil) {
-						ilea := newi(ILEA);
-						*ilea.s = *Wi.dst;
-						addrdind(ilea.d, Afpind, frametemp, WREGRET);
-					}
-
-					icall := newi(ICALL);
-					addrsind(icall.s, Afp, frametemp);
-					addrimm(icall.d, 0);  # PC patched later
-
-					# Record call for patching (using local index)
-					wcallinsts = ref Callpatch(icall, localidx) :: wcallinsts;
-
-					relreg(ref Addr(Afp, 0, frametemp));
+				paramoff := NREG * IBY2WD + 3 * IBY2WD;
+				for(ai := 0; ai < nargs; ai++) {
+					argtype := calleetype.args[ai];
+					dtype := w2dtype(argtype);
+					paramoff = align(paramoff, cellsize[int dtype]);
+					stackdepth := nargs - 1 - ai;
+					imov := newi(wmovinst(argtype));
+					*imov.s = *wsrc(stackdepth);
+					addrdind(imov.d, Afpind, frametemp, paramoff);
+					paramoff += cellsize[int dtype];
 				}
+
+				if(len calleetype.rets > 0 && Wi.dst != nil) {
+					ilea := newi(ILEA);
+					*ilea.s = *Wi.dst;
+					addrdind(ilea.d, Afpind, frametemp, WREGRET);
+				}
+
+				icall := newi(ICALL);
+				addrsind(icall.s, Afp, frametemp);
+				addrimm(icall.d, 0);  # PC patched later
+
+				# Record call for patching (frame tid and call PC)
+				wcallinsts = ref Callpatch(icall, iframe, localidx) :: wcallinsts;
+
+				relreg(ref Addr(Afp, 0, frametemp));
 			}
 		}
 
@@ -2912,9 +3094,39 @@ xlatwinst()
 		addrimm(i.s, -1);
 		*i.d = *Wi.dst;
 
+	Wi32_trunc_sat_f32_s or Wi32_trunc_sat_f64_s or
+	Wi32_trunc_sat_f32_u or Wi32_trunc_sat_f64_u =>
+		# Saturating float-to-int truncation: use regular cvtfw (no saturation)
+		i = newi(ICVTFW);
+		*i.s = *wsrc(0);
+		*i.d = *Wi.dst;
+
+	Wi64_trunc_sat_f32_s or Wi64_trunc_sat_f32_u or
+	Wi64_trunc_sat_f64_s or Wi64_trunc_sat_f64_u =>
+		# Saturating float-to-i64 truncation: use regular cvtfl (no saturation)
+		i = newi(ICVTFL);
+		*i.s = *wsrc(0);
+		*i.d = *Wi.dst;
+
+	Wmemory_copy =>
+		# memory.copy: dst, src, n on stack
+		xmemcopy();
+
+	Wmemory_fill =>
+		# memory.fill: dst, val, n on stack
+		xmemfill();
+
+	Wmemory_init =>
+		# memory.init: dst, src, n on stack (stub: no-op, data not tracked)
+		;
+
+	Wdata_drop =>
+		# data.drop: no-op (we don't track data segment state)
+		;
+
 	* =>
-		# Unknown opcode - generate nop
-		i = newi(INOP);
+		# Unknown opcode - generate exit to trap
+		i = newi(IEXIT);
 	}
 }
 
@@ -3229,6 +3441,8 @@ wdisout()
 # Emit LDTS section for .dis binary output.
 # One linkage descriptor table per unique imported module.
 #
+SETMEM_SIG: con int 16r48895cd1;	# signature hash for setmem(mem: array of byte)
+
 wdisldts()
 {
 	discon(nimportuniqmods);
@@ -3238,6 +3452,9 @@ wdisldts()
 		for(fi := 0; fi < nimportfuncs; fi++)
 			if(wimportmodidx[fi] == mi)
 				nfuncs++;
+		# Add setmem entry if module has memory
+		if(hasmemory)
+			nfuncs++;
 		discon(nfuncs);
 
 		# Emit each function entry (in order of wimportfuncidx)
@@ -3251,6 +3468,14 @@ wdisldts()
 			# Get function name from import section
 			fname := wimportfuncname(fi);
 			d := array of byte fname;
+			bout.write(d, len d);
+			bout.putb(byte 0);
+		}
+
+		# Append setmem entry
+		if(hasmemory) {
+			disword(SETMEM_SIG);
+			d := array of byte "setmem";
 			bout.write(d, len d);
 			bout.putb(byte 0);
 		}
@@ -3273,6 +3498,9 @@ wasmldts()
 		for(fi := 0; fi < nimportfuncs; fi++)
 			if(wimportmodidx[fi] == mi)
 				nfuncs++;
+		# Add setmem entry if module has memory
+		if(hasmemory)
+			nfuncs++;
 		bout.puts("\tword\t@ldt+" + string ldtoff + "," + string nfuncs + "\n");
 		ldtoff += IBY2WD;
 		for(fi = 0; fi < nimportfuncs; fi++) {
@@ -3286,6 +3514,12 @@ wasmldts()
 			bout.puts("\text\t@ldt+" + string ldtoff + ",0x" + hex(sig, 0) + ",\"" + fname + "\"\n");
 			# Advance past sig (4 bytes) + name + null + alignment
 			ldtoff += IBY2WD + len array of byte fname + 1;
+		}
+		# Append setmem entry
+		if(hasmemory) {
+			ldtoff = align(ldtoff, IBY2WD);
+			bout.puts("\text\t@ldt+" + string ldtoff + ",0x" + hex(SETMEM_SIG, 0) + ",\"setmem\"\n");
+			ldtoff += IBY2WD + len array of byte "setmem" + 1;
 		}
 		ldtoff = align(ldtoff, IBY2WD);
 	}
@@ -3386,6 +3620,38 @@ genmeminit(m: ref Mod)
 		addrsind(iload.s, Amp, wimpmodpathoff[mi]);
 		addrimm(iload.m, mi);
 		addrsind(iload.d, Amp, wimpmodptroff[mi]);
+	}
+
+	# Call setmem on each imported module to pass linear memory reference
+	if(hasmemory && nimportuniqmods > 0) {
+		for(mi = 0; mi < nimportuniqmods; mi++) {
+			# Compute setmem's link index: count of real imports from this module
+			setmem_linkidx := 0;
+			for(fi := 0; fi < nimportfuncs; fi++)
+				if(wimportmodidx[fi] == mi)
+					setmem_linkidx++;
+
+			frametemp := getreg(DIS_W);
+
+			# mframe modptr(mp), $setmem_linkidx, frametemp(fp)
+			imf := newi(IMFRAME);
+			addrsind(imf.s, Amp, wimpmodptroff[mi]);
+			addrimm(imf.m, setmem_linkidx);
+			addrsind(imf.d, Afp, frametemp);
+
+			# movp WMEM_PTR(mp), 64(frametemp(fp))
+			imov := newi(IMOVP);
+			addrsind(imov.s, Amp, WMEM_PTR);
+			addrdind(imov.d, Afpind, frametemp, 64);
+
+			# mcall frametemp(fp), $setmem_linkidx, modptr(mp)
+			imc := newi(IMCALL);
+			addrsind(imc.s, Afp, frametemp);
+			addrimm(imc.m, setmem_linkidx);
+			addrsind(imc.d, Amp, wimpmodptroff[mi]);
+
+			relreg(ref Addr(Afp, 0, frametemp));
+		}
 	}
 
 	# Return
@@ -3562,7 +3828,13 @@ wxlate(m: ref Mod)
 		wimpmodptroff = array[nimportuniqmods] of int;
 		for(mi := 0; mi < nimportuniqmods; mi++) {
 			# Store module path string in mp
-			path := "./" + wimportuniqmods[mi] + ".dis";
+			# WASI modules are installed in /dis/wasi/; user modules use ./
+			name := wimportuniqmods[mi];
+			path: string;
+			if(len name >= 5 && name[:5] == "wasi_")
+				path = "/dis/wasi/" + name + ".dis";
+			else
+				path = "./" + name + ".dis";
 			wimpmodpathoff[mi] = mpstring(path);
 		}
 		for(mi = 0; mi < nimportuniqmods; mi++) {
@@ -3585,6 +3857,7 @@ wxlate(m: ref Mod)
 	wcallinsts = nil;
 
 	for(i := 0; i < len m.codesection.codes; i++) {
+		if(DEBUG)sys->print("FUNC %d/%d ninst=%d\n", i, len m.codesection.codes, len m.codesection.codes[i].code);
 		wcode := m.codesection.codes[i];
 		typeidx := m.funcsection.funcs[i];
 		functype := m.typesection.types[typeidx];
@@ -3601,9 +3874,8 @@ wxlate(m: ref Mod)
 		winitlocals(functype, wcode.locals);
 
 		# Simulate to allocate frame positions
+		simdebug = 0;
 		simwasm(wcode.code, functype);
-
-		# Translate to Dis instructions
 		wasm2dis(wcode.code);
 
 		# Copy return value to return location if function returns a value
@@ -3645,6 +3917,11 @@ wxlate(m: ref Mod)
 			targetpc := wfuncpcs[cp.funcidx];
 			if(targetpc >= 0)
 				addrimm(cp.callinst.d, targetpc);
+			calltid := -1;
+			if(cp.funcidx < len wfunctids)
+				calltid = wfunctids[cp.funcidx];
+			if(calltid >= 0 && cp.frameinst != nil)
+				addrimm(cp.frameinst.s, calltid);
 		}
 	}
 

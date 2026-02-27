@@ -141,9 +141,13 @@ wfindelse(startpc: int): int
 
 wallocdst(pc: int, wtype: int)
 {
+	if(simdebug) sys->print("      wallocdst: pc=%d wtype=%d wcode_len=%d\n", pc, wtype, len wcode);
 	Wi := wcode[pc];
+	if(simdebug) sys->print("      wallocdst: before getreg\n");
 	Wi.dst = ref Addr(byte 0, 0, 0);
-	addrsind(Wi.dst, Afp, getreg(w2dtype(wtype)));
+	off := getreg(w2dtype(wtype));
+	if(simdebug) sys->print("      wallocdst: after getreg off=%d\n", off);
+	addrsind(Wi.dst, Afp, off);
 }
 
 #
@@ -173,8 +177,12 @@ wgetsrc(r: ref WResult): ref Addr
 # Simulate a single WASM instruction.
 #
 
+simdebug: int;
+
 simwinst(pc: int)
 {
+	if(simdebug && pc >= 1385)
+		sys->print("    simwinst pc=%d/%d op=%d wtos=%d ctos=%d\n", pc, len wcode, wcode[pc].opcode, wtos, ctos);
 	Wi := wcode[pc];
 	r, r1, r2, r3: ref WResult;
 
@@ -480,6 +488,7 @@ simwinst(pc: int)
 		wpush(ref WResult(F32, pc));
 
 	Wf64_const =>
+		if(simdebug) sys->print("      f64_const: pc=%d tmpssz=%d tmps_len=%d\n", pc, tmpssz, len tmps);
 		wallocdst(pc, F64);
 		wpush(ref WResult(F64, pc));
 
@@ -708,6 +717,39 @@ simwinst(pc: int)
 		wreldst(r.pc);
 		wallocdst(pc, I64);
 		wpush(ref WResult(I64, pc));
+
+	Wi32_trunc_sat_f32_s or Wi32_trunc_sat_f32_u or
+	Wi32_trunc_sat_f64_s or Wi32_trunc_sat_f64_u =>
+		r = wpop();
+		wreldst(r.pc);
+		wallocdst(pc, I32);
+		wpush(ref WResult(I32, pc));
+
+	Wi64_trunc_sat_f32_s or Wi64_trunc_sat_f32_u or
+	Wi64_trunc_sat_f64_s or Wi64_trunc_sat_f64_u =>
+		r = wpop();
+		wreldst(r.pc);
+		wallocdst(pc, I64);
+		wpush(ref WResult(I64, pc));
+
+	Wmemory_copy or Wmemory_fill =>
+		r = wpop();  # n
+		wreldst(r.pc);
+		r2 := wpop();  # val/src
+		wreldst(r2.pc);
+		r3 := wpop();  # dst
+		wreldst(r3.pc);
+
+	Wmemory_init =>
+		r = wpop();  # n
+		wreldst(r.pc);
+		r2 := wpop();  # src
+		wreldst(r2.pc);
+		r3 := wpop();  # dst
+		wreldst(r3.pc);
+
+	Wdata_drop =>
+		;  # no stack effect
 
 	* =>
 		fatal("simwasm: unknown opcode " + string Wi.opcode);

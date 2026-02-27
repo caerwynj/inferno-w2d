@@ -196,6 +196,18 @@ optab := array[] of {
 	"i64.extend8_s",	#0xc2
 	"i64.extend16_s",	#0xc3
 	"i64.extend32_s",	#0xc4
+	"i32.trunc_sat_f32_s",	#0xc5
+	"i32.trunc_sat_f32_u",	#0xc6
+	"i32.trunc_sat_f64_s",	#0xc7
+	"i32.trunc_sat_f64_u",	#0xc8
+	"i64.trunc_sat_f32_s",	#0xc9
+	"i64.trunc_sat_f32_u",	#0xca
+	"i64.trunc_sat_f64_s",	#0xcb
+	"i64.trunc_sat_f64_u",	#0xcc
+	"memory.init",		#0xcd
+	"data.drop",		#0xce
+	"memory.copy",		#0xcf
+	"memory.fill",		#0xd0
 };
 sectab := array [] of {
 	"CUSTOM",

@@ -67,7 +67,7 @@ getoff(dtype: byte): int
 		stride = IBY2WD;
 		off = 0;
 	}
-	while(off < tmpssz) {
+	while(off < tmpssz && off < len tmps) {
 		if(tmps[off].refcnt == 0
 		&& (tmps[off].dtype == dtype || tmps[off].dtype == DIS_X)) {
 			return off;
@@ -87,7 +87,10 @@ getreg(dtype: byte): int
 	oldsz: int;
 
 	off = getoff(dtype);
-	if(off >= tmpssz) {	# increase size of temporary arena
+	need := off;
+	if(dtype == DIS_L)
+		need += IBY2WD;	# DIS_L needs two word slots
+	if(need >= tmpssz) {	# increase size of temporary arena
 		oldsz = tmpssz;
 		tmpssz += ALLOCINCR*IBY2LG;
 		newtmps := array [tmpssz] of Fp;
@@ -97,6 +100,7 @@ getreg(dtype: byte): int
 			newtmps[i] = Fp(byte 0, 0);
 		tmps = newtmps;
 	}
+	if(off >= len tmps) sys->print("BUG: getreg off=%d len_tmps=%d tmpssz=%d dtype=%d\n", off, len tmps, tmpssz, int dtype);
 	tmps[off].dtype = dtype;
 	if(dtype == DIS_L)	# also reserve next word
 		tmps[off+IBY2WD].dtype = dtype;

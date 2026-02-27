@@ -34,7 +34,8 @@ loadobj(wasmfile: string): (ref Mod, string)
 	while(wasmptr < len wasmobj) {
 		section := operand();
 		slen := operand();
-		if(DEBUG)sys->print("%s len %d\n", sectab[section], slen);
+		if(DEBUG)sys->print("SECTION %d (%s) len %d wasmptr %d/%d\n", section, sectab[section], slen, wasmptr, len wasmobj);
+		sectionstart := wasmptr;
 
 		case section {
 		STYPE =>
@@ -209,6 +210,41 @@ loadobj(wasmfile: string): (ref Mod, string)
 						memidx := operand();
 						if(DEBUG)sys->print("%s %d\n", optab[opcode], memidx);
 						l = ref Winst(opcode, memidx, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
+					Wfc_prefix =>
+						# 0xFC prefix: read LEB128 sub-opcode
+						subop := operand();
+						case subop {
+						0 to 7 =>
+							# trunc_sat instructions: no additional operands
+							wop := Wi32_trunc_sat_f32_s + subop;
+							if(DEBUG)sys->print("trunc_sat sub=%d\n", subop);
+							l = ref Winst(wop, -1, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
+						8 =>
+							# memory.init: segment_idx, mem_idx(0x00)
+							segidx := operand();
+							memidx2 := getb();
+							if(DEBUG)sys->print("memory.init seg=%d mem=%d\n", segidx, memidx2);
+							l = ref Winst(Wmemory_init, segidx, memidx2, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
+						9 =>
+							# data.drop: segment_idx
+							segidx := operand();
+							if(DEBUG)sys->print("data.drop seg=%d\n", segidx);
+							l = ref Winst(Wdata_drop, segidx, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
+						10 =>
+							# memory.copy: dst_mem(0x00), src_mem(0x00)
+							dstmem := getb();
+							srcmem := getb();
+							if(DEBUG)sys->print("memory.copy dst=%d src=%d\n", dstmem, srcmem);
+							l = ref Winst(Wmemory_copy, dstmem, srcmem, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
+						11 =>
+							# memory.fill: mem_idx(0x00)
+							memidx2 := getb();
+							if(DEBUG)sys->print("memory.fill mem=%d\n", memidx2);
+							l = ref Winst(Wmemory_fill, memidx2, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
+						* =>
+							if(DEBUG)sys->print("unknown FC prefix sub=%d\n", subop);
+							l = ref Winst(Wfc_prefix, subop, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
+						}
 					* =>
 						if(DEBUG)sys->print("%s\n", optab[opcode]);
 						l = ref Winst(opcode, -1, -1, nil, 0, 0, nil, -1, nil, nil, nil, nil, -1, -1, -1) :: l;
@@ -330,6 +366,7 @@ loadobj(wasmfile: string): (ref Mod, string)
 		* =>
 			wasmptr += slen;
 		}
+		if(DEBUG)sys->print("  AFTER section %d: wasmptr %d, expected %d\n", section, wasmptr, sectionstart + slen);
 	}
 
 	wasmobj = nil;
