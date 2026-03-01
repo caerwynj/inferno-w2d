@@ -1,0 +1,10 @@
+<$ROOT/mkconfig
+
+TARG=wasi_snapshot_preview1.dis
+
+SYSMODULES=\
+	sys.m\
+
+DISBIN=../../dis/wasi
+
+<$ROOT/mkfiles/mkdis
